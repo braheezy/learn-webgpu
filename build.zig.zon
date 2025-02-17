@@ -1,0 +1,30 @@
+.{
+    .name = "learn-webgpu",
+
+    .version = "0.0.0",
+
+    .dependencies = .{
+        .zglfw = .{
+            .url = "https://github.com/zig-gamedev/zglfw/archive/e9bd486903b5904b6d4e27b8b3771b138a667ef1.tar.gz",
+            .hash = "12209fb981e7aab58c2f9062ab526bd43df3d7953aa41e131a173c37ad35d10b1132",
+        },
+        .zgpu = .{
+            .url = "https://github.com/zig-gamedev/zgpu/archive/bc10f874cf9c93e347c1298efba87be4f001fc9d.tar.gz",
+            .hash = "122020a116e18cad9f4ea905ca63a1505a47d680feb6edc9ebcf34795bf338f5868b",
+        },
+        .dawn_aarch64_macos = .{
+            .url = "https://github.com/michal-z/webgpu_dawn-aarch64-macos/archive/d2360cdfff0cf4a780cb77aa47c57aca03cc6dfe.tar.gz",
+            .hash = "12201fe677e9c7cfb8984a36446b329d5af23d03dc1e4f79a853399529e523a007fa",
+            .lazy = true,
+        },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        // For example...
+        //"LICENSE",
+        //"README.md",
+    },
+}
