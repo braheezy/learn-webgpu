@@ -54,7 +54,32 @@ pub fn run(self: *App) void {
     while (!self.window.shouldClose()) {
         zglfw.pollEvents();
 
-        // render your things here
+        const view = self.gfx.swapchain.getCurrentTextureView();
+        defer view.release();
+
+        const encoder = self.gfx.device.createCommandEncoder(null);
+        defer encoder.release();
+
+        const color_attachment = [_]zgpu.wgpu.RenderPassColorAttachment{.{
+            .view = view,
+            .load_op = .clear,
+            .store_op = .store,
+            .clear_value = .{ .r = 0.4, .g = 0.8, .b = 0.2, .a = 1.0 },
+        }};
+
+        const render_pass_info = zgpu.wgpu.RenderPassDescriptor{
+            .color_attachments = &color_attachment,
+            .color_attachment_count = 1,
+        };
+
+        const pass = encoder.beginRenderPass(render_pass_info);
+        pass.end();
+        pass.release();
+        const command_buffer = encoder.finish(null);
+        defer command_buffer.release();
+
+        self.gfx.submit(&.{command_buffer});
+        _ = self.gfx.present();
 
         self.window.swapBuffers();
     }
