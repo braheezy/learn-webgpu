@@ -2,6 +2,11 @@ const std = @import("std");
 const zglfw = @import("zglfw");
 const zgpu = @import("zgpu");
 
+const Context = struct {
+    ready: bool,
+    buffer: zgpu.wgpu.Buffer,
+};
+
 const shader_source =
     \\@vertex
     \\fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4f {
@@ -72,8 +77,41 @@ pub fn deinit(self: *App) void {
     self.allocator.destroy(self);
 }
 
-pub fn run(self: *App) void {
+pub fn run(self: *App) !void {
+    var buffer_desc = zgpu.wgpu.BufferDescriptor{
+        .label = "Some GPU-side data buffer",
+        .usage = .{ .copy_dst = true, .copy_src = true },
+        .size = 16,
+        .mapped_at_creation = .false,
+    };
+    const buffer1 = self.gfx.device.createBuffer(buffer_desc);
+    defer buffer1.release();
+
+    buffer_desc.label = "Output buffer";
+    buffer_desc.usage = .{ .copy_dst = true, .map_read = true };
+    buffer_desc.size = 16;
+    buffer_desc.mapped_at_creation = .false;
+    const buffer2 = self.gfx.device.createBuffer(buffer_desc);
+    defer buffer2.release();
+
+    // First submit the write operation
+    const numbers = try self.allocator.alloc(u8, 16);
+    defer self.allocator.free(numbers);
+    for (0..16) |i| {
+        numbers[i] = @as(u8, @intCast(i));
+    }
+    self.gfx.queue.writeBuffer(buffer1, 0, u8, numbers);
+
+    var context = Context{
+        .ready = false,
+        .buffer = buffer2,
+    };
+
+    // Main render loop
     while (!self.window.shouldClose()) {
+        // while (!context.ready) {
+        self.gfx.device.tick();
+        // }
         zglfw.pollEvents();
 
         const view = self.gfx.swapchain.getCurrentTextureView();
@@ -81,6 +119,8 @@ pub fn run(self: *App) void {
 
         const encoder = self.gfx.device.createCommandEncoder(null);
         defer encoder.release();
+
+        encoder.copyBufferToBuffer(buffer1, 0, buffer2, 0, 16);
 
         const color_attachment = [_]zgpu.wgpu.RenderPassColorAttachment{.{
             .view = view,
@@ -108,6 +148,29 @@ pub fn run(self: *App) void {
 
         self.gfx.submit(&.{command_buffer});
         _ = self.gfx.present();
+
+        // After submitting commands, we can map the buffer to read its contents
+        buffer2.mapAsync(
+            .{ .read = true },
+            0,
+            16,
+            onBuffer2Mapped,
+            @as(?*anyopaque, @constCast(&context)),
+        );
+
+        // Wait until the callback sets ready to true
+        while (!context.ready) {
+            self.gfx.device.tick();
+        }
+
+        // Now that we know it's mapped (callback was called), we can safely read it
+        if (context.buffer.getConstMappedRange(u8, 0, 16)) |data| {
+            std.debug.print("Buffer contents: {any}\n", .{data});
+        }
+        // Unmap after reading
+        context.buffer.unmap();
+        // Reset ready flag for next frame
+        context.ready = false;
 
         self.window.swapBuffers();
     }
@@ -158,4 +221,10 @@ fn createPipeline(gctx: *zgpu.GraphicsContext) zgpu.RenderPipelineHandle {
     };
 
     return gctx.createRenderPipeline(pipeline_layout, pipeline_desc);
+}
+
+fn onBuffer2Mapped(status: zgpu.wgpu.BufferMapAsyncStatus, userdata: ?*anyopaque) callconv(.c) void {
+    const ctx: *Context = @ptrCast(@alignCast(userdata));
+    ctx.ready = true;
+    std.debug.print("Buffer2 mapped: {any}\n", .{status});
 }
