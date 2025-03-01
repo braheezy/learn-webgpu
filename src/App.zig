@@ -8,24 +8,39 @@ const Context = struct {
 };
 
 const shader_source =
+    \\struct VertexInput {
+    \\  @location(0) position: vec2f,
+    \\  @location(1) color: vec3f,
+    \\};
+    \\struct VertexOutput {
+    \\  @builtin(position) position: vec4f,
+    \\  @location(0) color: vec3f,
+    \\};
+    \\
     \\@vertex
-    \\fn vs_main(@location(0) in_vertex_position: vec2f) -> @builtin(position) vec4f {
-    \\    return vec4f(in_vertex_position, 0.0, 1.0);
+    \\fn vs_main(in: VertexInput) -> VertexOutput {
+    \\  var out: VertexOutput;
+    \\  out.position = vec4f(in.position, 0.0, 1.0);
+    \\  out.color = in.color;
+    \\  return out;
     \\}
     \\@fragment
-    \\fn fs_main() -> @location(0) vec4f {
-    \\    return vec4f(0.0, 0.4, 1.0, 1.0);
+    \\fn fs_main(in: VertexOutput) -> @location(0) vec4f  {
+    \\    return vec4f(in.color, 1.0);
     \\}
 ;
 
 const vertex_data = [_]f32{
-    -0.5,  -0.5,
-    0.5,   -0.5,
-    0.0,   0.5,
+    // x0,  y0,  r0,  g0,  b0
+    -0.5,  -0.5, 1.0, 0.0, 0.0,
 
-    -0.55, -0.5,
-    -0.05, 0.5,
-    -0.55, 0.5,
+    // x1,  y1,  r1,  g1,  b1
+    0.5,   -0.5, 0.0, 1.0, 0.0,
+
+    0.0,   0.5,  0.0, 0.0, 1.0,
+    -0.55, -0.5, 1.0, 1.0, 0.0,
+    -0.05, 0.5,  1.0, 0.0, 1.0,
+    -0.55, 0.5,  0.0, 1.0, 1.0,
 };
 
 const App = @This();
@@ -58,10 +73,11 @@ pub fn init(allocator: std.mem.Allocator) !*App {
         .fn_getCocoaWindow = @ptrCast(&zglfw.getCocoaWindow),
     }, .{ .required_limits = &zgpu.wgpu.RequiredLimits{
         .limits = .{
-            .max_vertex_attributes = 1,
+            .max_vertex_attributes = 2,
             .max_vertex_buffers = 1,
-            .max_buffer_size = 6 * 2 * @sizeOf(f32),
-            .max_vertex_buffer_array_stride = 2 * @sizeOf(f32),
+            .max_buffer_size = 6 * 5 * @sizeOf(f32),
+            .max_vertex_buffer_array_stride = 5 * @sizeOf(f32),
+            .max_inter_stage_shader_components = 3,
         },
     } });
 
@@ -72,7 +88,7 @@ pub fn init(allocator: std.mem.Allocator) !*App {
         .window = window,
         .gfx = gctx,
         .pipeline = pipeline,
-        .vertex_count = @divExact(vertex_data.len, 2),
+        .vertex_count = @divExact(vertex_data.len, 5),
     };
     app.initializeBuffers();
     return app;
@@ -116,7 +132,7 @@ pub fn run(self: *App) !void {
             .view = view,
             .load_op = .clear,
             .store_op = .store,
-            .clear_value = .{ .r = 0.4, .g = 0.8, .b = 0.2, .a = 1.0 },
+            .clear_value = .{ .r = 0.05, .g = 0.05, .b = 0.05, .a = 1.0 },
         }};
 
         const render_pass_info = zgpu.wgpu.RenderPassDescriptor{
@@ -183,10 +199,19 @@ fn createPipeline(gctx: *zgpu.GraphicsContext) zgpu.RenderPipelineHandle {
         .offset = 0,
     };
 
+    const color_attribute = zgpu.wgpu.VertexAttribute{
+        .shader_location = 1,
+        .format = .float32x3,
+        .offset = 2 * @sizeOf(f32),
+    };
+
     const vertex_buffer_layout = zgpu.wgpu.VertexBufferLayout{
-        .array_stride = 2 * @sizeOf(f32),
-        .attribute_count = 1,
-        .attributes = &[_]zgpu.wgpu.VertexAttribute{position_attribute},
+        .array_stride = 5 * @sizeOf(f32),
+        .attribute_count = 2,
+        .attributes = &[_]zgpu.wgpu.VertexAttribute{
+            position_attribute,
+            color_attribute,
+        },
     };
 
     const pipeline_desc = zgpu.wgpu.RenderPipelineDescriptor{
