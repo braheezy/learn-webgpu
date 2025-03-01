@@ -2,43 +2,9 @@ const std = @import("std");
 const zglfw = @import("zglfw");
 const zgpu = @import("zgpu");
 
-const shader_source =
-    \\struct VertexInput {
-    \\  @location(0) position: vec2f,
-    \\  @location(1) color: vec3f,
-    \\};
-    \\struct VertexOutput {
-    \\  @builtin(position) position: vec4f,
-    \\  @location(0) color: vec3f,
-    \\};
-    \\
-    \\@vertex
-    \\fn vs_main(in: VertexInput) -> VertexOutput {
-    \\  var out: VertexOutput;
-    \\  out.position = vec4f(in.position, 0.0, 1.0);
-    \\  out.color = in.color;
-    \\  let ratio = 640.0 / 480.0;
-    \\  out.position = vec4f(in.position.x, in.position.y * ratio, 0.0, 1.0);
-    \\  return out;
-    \\}
-    \\@fragment
-    \\fn fs_main(in: VertexOutput) -> @location(0) vec4f  {
-    \\    return vec4f(in.color, 1.0);
-    \\}
-;
+const ResourceManager = @import("ResourceManager.zig");
 
-const point_data = [_]f32{
-    // x,   y,     r,   g,   b
-    -0.5, -0.5, 1.0, 0.0, 0.0,
-    0.5,  -0.5, 0.0, 1.0, 0.0,
-    0.5,  0.5,  0.0, 0.0, 1.0,
-    -0.5, 0.5,  1.0, 1.0, 0.0,
-};
-
-const index_data = [_]u16{
-    0, 1, 2, // Triangle #0
-    0, 2, 3, // Triangle #1
-};
+const vertex_text_file = @embedFile("resources/webgpu.txt");
 
 const App = @This();
 
@@ -48,7 +14,7 @@ gfx: *zgpu.GraphicsContext,
 pipeline: zgpu.RenderPipelineHandle,
 point_buffer: zgpu.wgpu.Buffer = undefined,
 index_buffer: zgpu.wgpu.Buffer = undefined,
-index_count: u32,
+index_count: u32 = 0,
 
 pub fn init(allocator: std.mem.Allocator) !*App {
     try zglfw.init();
@@ -73,22 +39,21 @@ pub fn init(allocator: std.mem.Allocator) !*App {
         .limits = .{
             .max_vertex_attributes = 2,
             .max_vertex_buffers = 1,
-            .max_buffer_size = 6 * 5 * @sizeOf(f32),
+            .max_buffer_size = 15 * 5 * @sizeOf(f32),
             .max_vertex_buffer_array_stride = 5 * @sizeOf(f32),
             .max_inter_stage_shader_components = 3,
         },
     } });
 
     const app = try allocator.create(App);
-    const pipeline = createPipeline(gctx);
+    const pipeline = try createPipeline(allocator, gctx);
     app.* = App{
         .allocator = allocator,
         .window = window,
         .gfx = gctx,
         .pipeline = pipeline,
-        .index_count = index_data.len,
     };
-    app.initializeBuffers();
+    try app.initializeBuffers();
     return app;
 }
 
@@ -102,27 +67,46 @@ pub fn deinit(self: *App) void {
     self.allocator.destroy(self);
 }
 
-fn initializeBuffers(self: *App) void {
+fn initializeBuffers(self: *App) !void {
+    var point_data = std.ArrayList(f32).init(self.allocator);
+    var index_data = std.ArrayList(u16).init(self.allocator);
+    defer point_data.deinit();
+    defer index_data.deinit();
+
+    try ResourceManager.loadGeometry(vertex_text_file, &point_data, &index_data);
+    self.index_count = @intCast(index_data.items.len);
+
     var buffer_desc = zgpu.wgpu.BufferDescriptor{
-        .label = "Some GPU-side data buffer",
+        .label = "Vertex buffer",
         .usage = .{ .copy_dst = true, .vertex = true },
-        .size = point_data.len * @sizeOf(f32),
+        .size = point_data.items.len * @sizeOf(f32),
         .mapped_at_creation = .false,
     };
+    buffer_desc.size = (buffer_desc.size + 3) & ~@as(u64, 3);
     // create point buffer
     self.point_buffer = self.gfx.device.createBuffer(buffer_desc);
     // upload to buffer
-    self.gfx.queue.writeBuffer(self.point_buffer, 0, f32, &point_data);
+    self.gfx.queue.writeBuffer(self.point_buffer, 0, f32, point_data.items);
 
     // Now the index buffer, reusing the buffer descriptor
-    buffer_desc.size = index_data.len * @sizeOf(u16);
+    buffer_desc.label = "Index Buffer";
+    buffer_desc.size = index_data.items.len * @sizeOf(u16);
     // round size to the nearest multiple of 4
     buffer_desc.size = (buffer_desc.size + 3) & ~@as(u64, 3);
     buffer_desc.usage = .{ .copy_dst = true, .index = true };
     self.index_buffer = self.gfx.device.createBuffer(buffer_desc);
 
+    if (index_data.items.len != buffer_desc.size) {
+        // Pad index_data to the nearest multiple of 4
+        const padding = buffer_desc.size - (index_data.items.len * @sizeOf(u16));
+        const padding_data = try self.allocator.alloc(u16, padding / @sizeOf(u16));
+        @memset(padding_data, 0);
+        defer self.allocator.free(padding_data);
+        try index_data.appendSlice(padding_data);
+    }
+
     // First submit the write operation
-    self.gfx.queue.writeBuffer(self.index_buffer, 0, u16, &index_data);
+    self.gfx.queue.writeBuffer(self.index_buffer, 0, u16, index_data.items);
 }
 
 pub fn run(self: *App) !void {
@@ -167,21 +151,16 @@ pub fn run(self: *App) !void {
         self.gfx.submit(&.{command_buffer});
         _ = self.gfx.present();
 
-        // After submitting commands, we can map the buffer to read its contents
-        // buffer2.mapAsync(
-        //     .{ .read = true },
-        //     0,
-        //     16,
-        //     onBuffer2Mapped,
-        //     @as(?*anyopaque, @constCast(&context)),
-        // );
-
         self.window.swapBuffers();
     }
 }
 
-fn createPipeline(gctx: *zgpu.GraphicsContext) zgpu.RenderPipelineHandle {
-    const shader_module = zgpu.createWgslShaderModule(gctx.device, shader_source, "main");
+fn createPipeline(allocator: std.mem.Allocator, gctx: *zgpu.GraphicsContext) !zgpu.RenderPipelineHandle {
+    const shader_module = try ResourceManager.loadShaderModule(
+        allocator,
+        "src/resources/shader.wgsl",
+        gctx.device,
+    );
     defer shader_module.release();
 
     const pipeline_layout = zgpu.PipelineLayoutHandle.nil;
