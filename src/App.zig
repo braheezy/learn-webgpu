@@ -2,11 +2,6 @@ const std = @import("std");
 const zglfw = @import("zglfw");
 const zgpu = @import("zgpu");
 
-const Context = struct {
-    ready: bool,
-    buffer: zgpu.wgpu.Buffer,
-};
-
 const shader_source =
     \\struct VertexInput {
     \\  @location(0) position: vec2f,
@@ -22,6 +17,8 @@ const shader_source =
     \\  var out: VertexOutput;
     \\  out.position = vec4f(in.position, 0.0, 1.0);
     \\  out.color = in.color;
+    \\  let ratio = 640.0 / 480.0;
+    \\  out.position = vec4f(in.position.x, in.position.y * ratio, 0.0, 1.0);
     \\  return out;
     \\}
     \\@fragment
@@ -30,17 +27,17 @@ const shader_source =
     \\}
 ;
 
-const vertex_data = [_]f32{
-    // x0,  y0,  r0,  g0,  b0
-    -0.5,  -0.5, 1.0, 0.0, 0.0,
+const point_data = [_]f32{
+    // x,   y,     r,   g,   b
+    -0.5, -0.5, 1.0, 0.0, 0.0,
+    0.5,  -0.5, 0.0, 1.0, 0.0,
+    0.5,  0.5,  0.0, 0.0, 1.0,
+    -0.5, 0.5,  1.0, 1.0, 0.0,
+};
 
-    // x1,  y1,  r1,  g1,  b1
-    0.5,   -0.5, 0.0, 1.0, 0.0,
-
-    0.0,   0.5,  0.0, 0.0, 1.0,
-    -0.55, -0.5, 1.0, 1.0, 0.0,
-    -0.05, 0.5,  1.0, 0.0, 1.0,
-    -0.55, 0.5,  0.0, 1.0, 1.0,
+const index_data = [_]u16{
+    0, 1, 2, // Triangle #0
+    0, 2, 3, // Triangle #1
 };
 
 const App = @This();
@@ -49,8 +46,9 @@ allocator: std.mem.Allocator,
 window: *zglfw.Window,
 gfx: *zgpu.GraphicsContext,
 pipeline: zgpu.RenderPipelineHandle,
-vertex_buffer: zgpu.wgpu.Buffer = undefined,
-vertex_count: u32,
+point_buffer: zgpu.wgpu.Buffer = undefined,
+index_buffer: zgpu.wgpu.Buffer = undefined,
+index_count: u32,
 
 pub fn init(allocator: std.mem.Allocator) !*App {
     try zglfw.init();
@@ -88,14 +86,15 @@ pub fn init(allocator: std.mem.Allocator) !*App {
         .window = window,
         .gfx = gctx,
         .pipeline = pipeline,
-        .vertex_count = @divExact(vertex_data.len, 5),
+        .index_count = index_data.len,
     };
     app.initializeBuffers();
     return app;
 }
 
 pub fn deinit(self: *App) void {
-    self.vertex_buffer.release();
+    self.point_buffer.release();
+    self.index_buffer.release();
     self.gfx.destroy(self.allocator);
 
     zglfw.destroyWindow(self.window);
@@ -104,16 +103,26 @@ pub fn deinit(self: *App) void {
 }
 
 fn initializeBuffers(self: *App) void {
-    const buffer_desc = zgpu.wgpu.BufferDescriptor{
+    var buffer_desc = zgpu.wgpu.BufferDescriptor{
         .label = "Some GPU-side data buffer",
         .usage = .{ .copy_dst = true, .vertex = true },
-        .size = vertex_data.len * @sizeOf(f32),
+        .size = point_data.len * @sizeOf(f32),
         .mapped_at_creation = .false,
     };
-    self.vertex_buffer = self.gfx.device.createBuffer(buffer_desc);
+    // create point buffer
+    self.point_buffer = self.gfx.device.createBuffer(buffer_desc);
+    // upload to buffer
+    self.gfx.queue.writeBuffer(self.point_buffer, 0, f32, &point_data);
+
+    // Now the index buffer, reusing the buffer descriptor
+    buffer_desc.size = index_data.len * @sizeOf(u16);
+    // round size to the nearest multiple of 4
+    buffer_desc.size = (buffer_desc.size + 3) & ~@as(u64, 3);
+    buffer_desc.usage = .{ .copy_dst = true, .index = true };
+    self.index_buffer = self.gfx.device.createBuffer(buffer_desc);
 
     // First submit the write operation
-    self.gfx.queue.writeBuffer(self.vertex_buffer, 0, f32, &vertex_data);
+    self.gfx.queue.writeBuffer(self.index_buffer, 0, u16, &index_data);
 }
 
 pub fn run(self: *App) !void {
@@ -145,8 +154,9 @@ pub fn run(self: *App) !void {
 
         pass.setPipeline(pipeline);
 
-        pass.setVertexBuffer(0, self.vertex_buffer, 0, vertex_data.len * @sizeOf(f32));
-        pass.draw(self.vertex_count, 1, 0, 0);
+        pass.setVertexBuffer(0, self.point_buffer, 0, self.point_buffer.getSize());
+        pass.setIndexBuffer(self.index_buffer, .uint16, 0, self.index_buffer.getSize());
+        pass.drawIndexed(self.index_count, 1, 0, 0, 0);
 
         pass.end();
         pass.release();
