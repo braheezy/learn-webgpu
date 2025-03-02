@@ -10,11 +10,12 @@ const App = @This();
 
 allocator: std.mem.Allocator,
 window: *zglfw.Window,
-gfx: *zgpu.GraphicsContext,
-pipeline: zgpu.RenderPipelineHandle,
+gfx: *zgpu.GraphicsContext = undefined,
+pipeline: zgpu.RenderPipelineHandle = undefined,
 point_buffer: zgpu.wgpu.Buffer = undefined,
 index_buffer: zgpu.wgpu.Buffer = undefined,
 index_count: u32 = 0,
+bind_group: zgpu.BindGroupHandle = undefined,
 
 pub fn init(allocator: std.mem.Allocator) !*App {
     try zglfw.init();
@@ -22,8 +23,13 @@ pub fn init(allocator: std.mem.Allocator) !*App {
     zglfw.windowHint(.resizable, false);
 
     const window = try zglfw.createWindow(640, 480, "Learn WebGPU", null);
+    const app = try allocator.create(App);
+    app.* = App{
+        .allocator = allocator,
+        .window = window,
+    };
 
-    const gctx = try zgpu.GraphicsContext.create(allocator, .{
+    app.gfx = try zgpu.GraphicsContext.create(allocator, .{
         .window = window,
         .fn_getTime = @ptrCast(&zglfw.getTime),
         .fn_getFramebufferSize = @ptrCast(&zglfw.Window.getFramebufferSize),
@@ -42,17 +48,14 @@ pub fn init(allocator: std.mem.Allocator) !*App {
             .max_buffer_size = 15 * 5 * @sizeOf(f32),
             .max_vertex_buffer_array_stride = 5 * @sizeOf(f32),
             .max_inter_stage_shader_components = 3,
+            .max_bind_groups = 1,
+            .max_uniform_buffers_per_shader_stage = 1,
+            .max_uniform_buffer_binding_size = 16 * 4,
         },
     } });
 
-    const app = try allocator.create(App);
-    const pipeline = try createPipeline(allocator, gctx);
-    app.* = App{
-        .allocator = allocator,
-        .window = window,
-        .gfx = gctx,
-        .pipeline = pipeline,
-    };
+    try app.createPipeline(allocator);
+
     try app.initializeBuffers();
     return app;
 }
@@ -115,6 +118,11 @@ pub fn run(self: *App) !void {
         self.gfx.device.tick();
         zglfw.pollEvents();
 
+        const dt = @as(f32, @floatCast(self.gfx.stats.time));
+
+        const uni_mem = self.gfx.uniformsAllocate(f32, 1);
+        uni_mem.slice[0] = dt;
+
         const view = self.gfx.swapchain.getCurrentTextureView();
         defer view.release();
 
@@ -135,11 +143,13 @@ pub fn run(self: *App) !void {
 
         const pass = encoder.beginRenderPass(render_pass_info);
         const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
+        const bind_group = self.gfx.lookupResource(self.bind_group) orelse unreachable;
 
         pass.setPipeline(pipeline);
 
         pass.setVertexBuffer(0, self.point_buffer, 0, self.point_buffer.getSize());
         pass.setIndexBuffer(self.index_buffer, .uint16, 0, self.index_buffer.getSize());
+        pass.setBindGroup(0, bind_group, null);
         pass.drawIndexed(self.index_count, 1, 0, 0, 0);
 
         pass.end();
@@ -155,15 +165,28 @@ pub fn run(self: *App) !void {
     }
 }
 
-fn createPipeline(allocator: std.mem.Allocator, gctx: *zgpu.GraphicsContext) !zgpu.RenderPipelineHandle {
+fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
     const shader_module = try ResourceManager.loadShaderModule(
         allocator,
         "src/resources/shader.wgsl",
-        gctx.device,
+        self.gfx.device,
     );
     defer shader_module.release();
 
-    const pipeline_layout = zgpu.PipelineLayoutHandle.nil;
+    const bind_group_layout = self.gfx.createBindGroupLayout(&.{
+        .{
+            .binding = 0,
+            .visibility = .{ .vertex = true },
+            .buffer = .{
+                .binding_type = .uniform,
+                .min_binding_size = 4 * @sizeOf(f32),
+            },
+        },
+    });
+    defer self.gfx.releaseResource(bind_group_layout);
+
+    const pipeline_layout = self.gfx.createPipelineLayout(&.{bind_group_layout});
+    defer self.gfx.releaseResource(pipeline_layout);
 
     const color_targets = [_]zgpu.wgpu.ColorTargetState{.{
         .format = .bgra8_unorm,
@@ -224,5 +247,12 @@ fn createPipeline(allocator: std.mem.Allocator, gctx: *zgpu.GraphicsContext) !zg
         .depth_stencil = null,
     };
 
-    return gctx.createRenderPipeline(pipeline_layout, pipeline_desc);
+    self.pipeline = self.gfx.createRenderPipeline(pipeline_layout, pipeline_desc);
+
+    self.bind_group = self.gfx.createBindGroup(bind_group_layout, &.{.{
+        .binding = 0,
+        .buffer_handle = self.gfx.uniforms.buffer,
+        .offset = 0,
+        .size = 4 * @sizeOf(f32),
+    }});
 }
