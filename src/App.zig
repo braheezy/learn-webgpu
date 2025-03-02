@@ -6,6 +6,17 @@ const ResourceManager = @import("ResourceManager.zig");
 
 const vertex_text_file = @embedFile("resources/webgpu.txt");
 
+const MyUniforms = struct {
+    color: [4]f32 = .{ 0.0, 1.0, 0.4, 1.0 },
+    time: f32 = 1.0,
+    padding: [3]f32 = [_]f32{0} ** 3,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(MyUniforms) == 32);
+    std.debug.assert(@sizeOf(MyUniforms) % 16 == 0);
+}
+
 const App = @This();
 
 allocator: std.mem.Allocator,
@@ -16,6 +27,7 @@ point_buffer: zgpu.wgpu.Buffer = undefined,
 index_buffer: zgpu.wgpu.Buffer = undefined,
 index_count: u32 = 0,
 bind_group: zgpu.BindGroupHandle = undefined,
+my_uniforms: MyUniforms = .{},
 
 pub fn init(allocator: std.mem.Allocator) !*App {
     try zglfw.init();
@@ -118,10 +130,14 @@ pub fn run(self: *App) !void {
         self.gfx.device.tick();
         zglfw.pollEvents();
 
-        const dt = @as(f32, @floatCast(self.gfx.stats.time));
+        const time = @as(f32, @floatCast(self.gfx.stats.time));
 
-        const uni_mem = self.gfx.uniformsAllocate(f32, 1);
-        uni_mem.slice[0] = dt;
+        self.my_uniforms.time = time;
+        self.my_uniforms.color = .{ 0.0, 1.0, 0.4, 1.0 }; // Green tint as in tutorial
+
+        // Allocate and update the entire uniform struct
+        const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
+        uni_mem.slice[0] = self.my_uniforms;
 
         const view = self.gfx.swapchain.getCurrentTextureView();
         defer view.release();
@@ -176,10 +192,10 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
     const bind_group_layout = self.gfx.createBindGroupLayout(&.{
         .{
             .binding = 0,
-            .visibility = .{ .vertex = true },
+            .visibility = .{ .vertex = true, .fragment = true },
             .buffer = .{
                 .binding_type = .uniform,
-                .min_binding_size = 4 * @sizeOf(f32),
+                .min_binding_size = @sizeOf(MyUniforms),
             },
         },
     });
@@ -253,6 +269,6 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .binding = 0,
         .buffer_handle = self.gfx.uniforms.buffer,
         .offset = 0,
-        .size = 4 * @sizeOf(f32),
+        .size = @sizeOf(MyUniforms),
     }});
 }

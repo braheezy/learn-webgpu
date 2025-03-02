@@ -79,7 +79,7 @@ pub fn loadShaderModule(al: std.mem.Allocator, path: []const u8, device: zgpu.wg
     // read file
     const contents = try file.readToEndAllocOptions(
         al,
-        1024,
+        1024 * 16,
         null,
         @alignOf(u8),
         0,
