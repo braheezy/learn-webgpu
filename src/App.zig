@@ -63,6 +63,7 @@ pub fn init(allocator: std.mem.Allocator) !*App {
             .max_bind_groups = 1,
             .max_uniform_buffers_per_shader_stage = 1,
             .max_uniform_buffer_binding_size = 16 * 4,
+            .max_dynamic_uniform_buffers_per_pipeline_layout = 1,
         },
     } });
 
@@ -132,13 +133,6 @@ pub fn run(self: *App) !void {
 
         const time = @as(f32, @floatCast(self.gfx.stats.time));
 
-        self.my_uniforms.time = time;
-        self.my_uniforms.color = .{ 0.0, 1.0, 0.4, 1.0 }; // Green tint as in tutorial
-
-        // Allocate and update the entire uniform struct
-        const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
-        uni_mem.slice[0] = self.my_uniforms;
-
         const view = self.gfx.swapchain.getCurrentTextureView();
         defer view.release();
 
@@ -149,7 +143,7 @@ pub fn run(self: *App) !void {
             .view = view,
             .load_op = .clear,
             .store_op = .store,
-            .clear_value = .{ .r = 0.05, .g = 0.05, .b = 0.05, .a = 1.0 },
+            .clear_value = .{ .r = 0.2, .g = 0.2, .b = 0.2, .a = 1.0 },
         }};
 
         const render_pass_info = zgpu.wgpu.RenderPassDescriptor{
@@ -165,8 +159,32 @@ pub fn run(self: *App) !void {
 
         pass.setVertexBuffer(0, self.point_buffer, 0, self.point_buffer.getSize());
         pass.setIndexBuffer(self.index_buffer, .uint16, 0, self.index_buffer.getSize());
-        pass.setBindGroup(0, bind_group, null);
-        pass.drawIndexed(self.index_count, 1, 0, 0, 0);
+
+        // Draw first object (green)
+        {
+            const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
+            uni_mem.slice[0] = MyUniforms{
+                .color = .{ 0.0, 1.0, 0.4, 1.0 },
+                .time = time,
+                .padding = [_]f32{0} ** 3,
+            };
+
+            pass.setBindGroup(0, bind_group, &.{uni_mem.offset});
+            pass.drawIndexed(self.index_count, 1, 0, 0, 0);
+        }
+
+        // Draw second object (blue/white)
+        {
+            const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
+            uni_mem.slice[0] = MyUniforms{
+                .color = .{ 0.6, 0.6, 1.0, 0.7 },
+                .time = -time, // Opposite rotation
+                .padding = [_]f32{0} ** 3,
+            };
+
+            pass.setBindGroup(0, bind_group, &.{uni_mem.offset});
+            pass.drawIndexed(self.index_count, 1, 0, 0, 0);
+        }
 
         pass.end();
         pass.release();
@@ -196,6 +214,7 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
             .buffer = .{
                 .binding_type = .uniform,
                 .min_binding_size = @sizeOf(MyUniforms),
+                .has_dynamic_offset = .true,
             },
         },
     });
