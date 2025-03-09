@@ -4,7 +4,7 @@ const zgpu = @import("zgpu");
 
 const ResourceManager = @import("ResourceManager.zig");
 
-const vertex_text_file = @embedFile("resources/webgpu.txt");
+const vertex_text_file = @embedFile("resources/pyramid.txt");
 
 const MyUniforms = struct {
     color: [4]f32 = .{ 0.0, 1.0, 0.4, 1.0 },
@@ -58,7 +58,7 @@ pub fn init(allocator: std.mem.Allocator) !*App {
             .max_vertex_attributes = 2,
             .max_vertex_buffers = 1,
             .max_buffer_size = 15 * 5 * @sizeOf(f32),
-            .max_vertex_buffer_array_stride = 5 * @sizeOf(f32),
+            .max_vertex_buffer_array_stride = 6 * @sizeOf(f32),
             .max_inter_stage_shader_components = 3,
             .max_bind_groups = 1,
             .max_uniform_buffers_per_shader_stage = 1,
@@ -89,7 +89,12 @@ fn initializeBuffers(self: *App) !void {
     defer point_data.deinit();
     defer index_data.deinit();
 
-    try ResourceManager.loadGeometry(vertex_text_file, &point_data, &index_data);
+    try ResourceManager.loadGeometry(
+        vertex_text_file,
+        &point_data,
+        &index_data,
+        3,
+    );
     self.index_count = @intCast(index_data.items.len);
 
     var buffer_desc = zgpu.wgpu.BufferDescriptor{
@@ -132,6 +137,12 @@ pub fn run(self: *App) !void {
         zglfw.pollEvents();
 
         const time = @as(f32, @floatCast(self.gfx.stats.time));
+        self.my_uniforms.time = time;
+        self.my_uniforms.color = .{ 0.0, 1.0, 0.4, 1.0 }; // Green tint as in tutorial
+
+        // Allocate and update the entire uniform struct
+        const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
+        uni_mem.slice[0] = self.my_uniforms;
 
         const view = self.gfx.swapchain.getCurrentTextureView();
         defer view.release();
@@ -160,31 +171,9 @@ pub fn run(self: *App) !void {
         pass.setVertexBuffer(0, self.point_buffer, 0, self.point_buffer.getSize());
         pass.setIndexBuffer(self.index_buffer, .uint16, 0, self.index_buffer.getSize());
 
-        // Draw first object (green)
-        {
-            const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
-            uni_mem.slice[0] = MyUniforms{
-                .color = .{ 0.0, 1.0, 0.4, 1.0 },
-                .time = time,
-                .padding = [_]f32{0} ** 3,
-            };
+        pass.setBindGroup(0, bind_group, null);
 
-            pass.setBindGroup(0, bind_group, &.{uni_mem.offset});
-            pass.drawIndexed(self.index_count, 1, 0, 0, 0);
-        }
-
-        // Draw second object (blue/white)
-        {
-            const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
-            uni_mem.slice[0] = MyUniforms{
-                .color = .{ 0.6, 0.6, 1.0, 0.7 },
-                .time = -time, // Opposite rotation
-                .padding = [_]f32{0} ** 3,
-            };
-
-            pass.setBindGroup(0, bind_group, &.{uni_mem.offset});
-            pass.drawIndexed(self.index_count, 1, 0, 0, 0);
-        }
+        pass.drawIndexed(self.index_count, 1, 0, 0, 0);
 
         pass.end();
         pass.release();
@@ -214,7 +203,6 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
             .buffer = .{
                 .binding_type = .uniform,
                 .min_binding_size = @sizeOf(MyUniforms),
-                .has_dynamic_offset = .true,
             },
         },
     });
@@ -242,18 +230,18 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
 
     const position_attribute = zgpu.wgpu.VertexAttribute{
         .shader_location = 0,
-        .format = .float32x2,
+        .format = .float32x3,
         .offset = 0,
     };
 
     const color_attribute = zgpu.wgpu.VertexAttribute{
         .shader_location = 1,
         .format = .float32x3,
-        .offset = 2 * @sizeOf(f32),
+        .offset = 3 * @sizeOf(f32),
     };
 
     const vertex_buffer_layout = zgpu.wgpu.VertexBufferLayout{
-        .array_stride = 5 * @sizeOf(f32),
+        .array_stride = 6 * @sizeOf(f32),
         .attribute_count = 2,
         .attributes = &[_]zgpu.wgpu.VertexAttribute{
             position_attribute,

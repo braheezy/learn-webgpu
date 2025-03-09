@@ -7,6 +7,7 @@ pub fn loadGeometry(
     data: []const u8,
     point_data: *std.ArrayList(f32),
     index_data: *std.ArrayList(u16),
+    dimensions: usize,
 ) !void {
     // Clear existing data
     point_data.clearRetainingCapacity();
@@ -47,8 +48,8 @@ pub fn loadGeometry(
         var iterator = std.mem.tokenizeScalar(u8, trimmed, ' ');
         switch (current_section) {
             .points => {
-                // Read 5 float values (x, y, r, g, b)
-                inline for (0..5) |_| {
+                // Read 5 float values (x, y, z, r, g, b)
+                for (0..dimensions + 3) |_| {
                     const token = iterator.next() orelse return error.InvalidFormat;
                     const value = try std.fmt.parseFloat(f32, token);
                     try point_data.append(value);

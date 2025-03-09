@@ -1,5 +1,5 @@
 struct VertexInput {
-  @location(0) position: vec2f,
+  @location(0) position: vec3f,
   @location(1) color: vec3f,
 };
 struct VertexOutput {
@@ -19,14 +19,21 @@ struct MyUniforms {
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
-  var out: VertexOutput;
+    var out: VertexOutput;
     let ratio = 640.0 / 480.0;
 
     // We now move the scene depending on the time!
-    var offset = vec2f(-0.6875, -0.463);
-    offset += 0.3 * vec2f(cos(uMyUniforms.time), sin(uMyUniforms.time));
+    var offset = vec2f(0, 0);
 
-    out.position = vec4f(in.position.x + offset.x, (in.position.y + offset.y) * ratio, 0.0, 1.0);
+    let angle = uMyUniforms.time; // you can multiply it go rotate faster
+    let alpha = cos(angle);
+    let beta = sin(angle);
+    var position = vec3f(
+        in.position.x,
+        alpha * in.position.y + beta * in.position.z,
+        alpha * in.position.z - beta * in.position.y,
+    );
+    out.position = vec4f(position.x, position.y * ratio, 0.0, 1.0);
     out.color = in.color;
     return out;
 }
