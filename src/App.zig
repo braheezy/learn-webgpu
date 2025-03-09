@@ -27,6 +27,8 @@ point_buffer: zgpu.wgpu.Buffer = undefined,
 index_buffer: zgpu.wgpu.Buffer = undefined,
 index_count: u32 = 0,
 bind_group: zgpu.BindGroupHandle = undefined,
+depth_texture: zgpu.TextureHandle = undefined,
+depth_view: zgpu.TextureViewHandle = undefined,
 my_uniforms: MyUniforms = .{},
 
 pub fn init(allocator: std.mem.Allocator) !*App {
@@ -64,6 +66,9 @@ pub fn init(allocator: std.mem.Allocator) !*App {
             .max_uniform_buffers_per_shader_stage = 1,
             .max_uniform_buffer_binding_size = 16 * 4,
             .max_dynamic_uniform_buffers_per_pipeline_layout = 1,
+            .max_texture_dimension_1d = 640,
+            .max_texture_dimension_2d = 480,
+            .max_texture_array_layers = 1,
         },
     } });
 
@@ -76,6 +81,10 @@ pub fn init(allocator: std.mem.Allocator) !*App {
 pub fn deinit(self: *App) void {
     self.point_buffer.release();
     self.index_buffer.release();
+    self.gfx.releaseResource(self.depth_texture);
+    self.gfx.destroyResource(self.depth_texture);
+    self.gfx.releaseResource(self.depth_view);
+
     self.gfx.destroy(self.allocator);
 
     zglfw.destroyWindow(self.window);
@@ -157,9 +166,24 @@ pub fn run(self: *App) !void {
             .clear_value = .{ .r = 0.2, .g = 0.2, .b = 0.2, .a = 1.0 },
         }};
 
+        const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
+
+        const depth_attachment = zgpu.wgpu.RenderPassDepthStencilAttachment{
+            .view = depth_view,
+            .depth_clear_value = 1.0,
+            .depth_load_op = .clear,
+            .depth_store_op = .store,
+            .depth_read_only = .false,
+            .stencil_clear_value = 0,
+            .stencil_load_op = .undef,
+            .stencil_store_op = .undef,
+            .stencil_read_only = .true,
+        };
+
         const render_pass_info = zgpu.wgpu.RenderPassDescriptor{
             .color_attachments = &color_attachment,
             .color_attachment_count = 1,
+            .depth_stencil_attachment = &depth_attachment,
         };
 
         const pass = encoder.beginRenderPass(render_pass_info);
@@ -249,6 +273,40 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         },
     };
 
+    const depth_stencil = zgpu.wgpu.DepthStencilState{
+        .depth_compare = .less,
+        .depth_write_enabled = true,
+        .format = .depth24_plus,
+        .stencil_read_mask = 0,
+        .stencil_write_mask = 0,
+    };
+
+    // texture for the depth buffer
+    self.depth_texture = self.gfx.createTexture(.{
+        .dimension = .tdim_2d,
+        .format = .depth24_plus,
+        .mip_level_count = 1,
+        .sample_count = 1,
+        .size = .{
+            .width = self.gfx.swapchain_descriptor.width,
+            .height = self.gfx.swapchain_descriptor.height,
+            .depth_or_array_layers = 1,
+        },
+        .usage = .{ .render_attachment = true },
+        .view_format_count = 1,
+        .view_formats = &[_]zgpu.wgpu.TextureFormat{.depth24_plus},
+    });
+
+    self.depth_view = self.gfx.createTextureView(self.depth_texture, .{
+        .aspect = .depth_only,
+        .base_array_layer = 0,
+        .array_layer_count = 1,
+        .base_mip_level = 0,
+        .mip_level_count = 1,
+        .dimension = .tvdim_2d,
+        .format = .depth24_plus,
+    });
+
     const pipeline_desc = zgpu.wgpu.RenderPipelineDescriptor{
         .vertex = .{
             .module = shader_module,
@@ -267,7 +325,7 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
             .target_count = color_targets.len,
             .targets = &color_targets,
         },
-        .depth_stencil = null,
+        .depth_stencil = &depth_stencil,
     };
 
     self.pipeline = self.gfx.createRenderPipeline(pipeline_layout, pipeline_desc);
