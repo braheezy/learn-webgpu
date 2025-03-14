@@ -1,21 +1,20 @@
 const std = @import("std");
 const zglfw = @import("zglfw");
 const zgpu = @import("zgpu");
+const zmath = @import("zmath");
 
 const ResourceManager = @import("ResourceManager.zig");
 
 const vertex_text_file = @embedFile("resources/pyramid.txt");
 
 const MyUniforms = struct {
+    projection: zmath.Mat = undefined,
+    view: zmath.Mat = undefined,
+    model: zmath.Mat = undefined,
     color: [4]f32 = .{ 0.0, 1.0, 0.4, 1.0 },
     time: f32 = 1.0,
     padding: [3]f32 = [_]f32{0} ** 3,
 };
-
-comptime {
-    std.debug.assert(@sizeOf(MyUniforms) == 32);
-    std.debug.assert(@sizeOf(MyUniforms) % 16 == 0);
-}
 
 const App = @This();
 
@@ -64,7 +63,7 @@ pub fn init(allocator: std.mem.Allocator) !*App {
             .max_inter_stage_shader_components = 3,
             .max_bind_groups = 1,
             .max_uniform_buffers_per_shader_stage = 1,
-            .max_uniform_buffer_binding_size = 16 * 4,
+            .max_uniform_buffer_binding_size = 16 * 4 * @sizeOf(f32),
             .max_dynamic_uniform_buffers_per_pipeline_layout = 1,
             .max_texture_dimension_1d = 640,
             .max_texture_dimension_2d = 480,
@@ -140,6 +139,54 @@ fn initializeBuffers(self: *App) !void {
 }
 
 pub fn run(self: *App) !void {
+    const scale = zmath.matFromArr(.{
+        0.3, 0.0, 0.0, 0.0,
+        0.0, 0.3, 0.0, 0.0,
+        0.0, 0.0, 0.3, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    });
+
+    const translation = zmath.matFromArr(.{
+        1.0, 0.0, 0.0, 0.5,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    });
+
+    // Create a proper view matrix using lookAt
+    // Eye position (camera position), target (where we're looking), and up vector
+    const eye_pos = zmath.f32x4(0.0, 0.0, 2.0, 1.0);
+    const target_pos = zmath.f32x4(0.0, 0.0, 0.0, 1.0);
+    const up_vec = zmath.f32x4(0.0, 1.0, 0.0, 0.0);
+
+    // Create right-handed view matrix
+    self.my_uniforms.view = zmath.lookAtRh(eye_pos, target_pos, up_vec);
+
+    const ratio = 640.0 / 480.0;
+
+    // Projection parameters
+    const near = 0.1;
+    const far = 10.0;
+    // Use the perspectiveFovRh function which creates a right-handed perspective matrix
+    // with depth range [0,1] appropriate for WebGPU (unlike OpenGL's [-1,1])
+    self.my_uniforms.projection = zmath.perspectiveFovRh(
+        std.math.pi / 4.0,
+        ratio,
+        near,
+        far,
+    );
+    // The above generates a right-handed perspective matrix with depth range [0,1]
+
+    // Initial angle for model rotation around Z axis
+    const angle1: f32 = 0.0;
+
+    // Create rotation matrices - initialized here, updated in loop
+    const R1 = zmath.rotationZ(angle1);
+
+    // Compute model and view matrices
+    // Since zmath is row-major and GLM is column-major, we reverse the order
+    self.my_uniforms.model = zmath.transpose(zmath.mul(scale, zmath.mul(translation, R1)));
+
     // Main render loop
     while (!self.window.shouldClose()) {
         self.gfx.device.tick();
@@ -148,6 +195,15 @@ pub fn run(self: *App) !void {
         const time = @as(f32, @floatCast(self.gfx.stats.time));
         self.my_uniforms.time = time;
         self.my_uniforms.color = .{ 0.0, 1.0, 0.4, 1.0 }; // Green tint as in tutorial
+
+        // Create rotation matrix using zmath's built-in function
+        // This creates a rotation around Y axis
+        const rotation_y = zmath.rotationY(time);
+
+        // Stack the transformations in the right order:
+        // First scale, then rotate, then translate
+        // For row-major matrices (zmath), we multiply from right to left (opposite of GLM)
+        self.my_uniforms.model = zmath.mul(zmath.mul(translation, rotation_y), scale);
 
         // Allocate and update the entire uniform struct
         const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);

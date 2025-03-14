@@ -17,6 +17,10 @@
             .hash = "12201fe677e9c7cfb8984a36446b329d5af23d03dc1e4f79a853399529e523a007fa",
             .lazy = true,
         },
+        .zmath = .{
+            .url = "git+https://github.com/zig-gamedev/zmath#f40bb8a935b4878c707c3fccfd5c234cfcb43bf2",
+            .hash = "1220c1ab7d1e49106f59c6adb4004befdb95525a72056364a663757aaa1365aae64a",
+        },
     },
 
     .paths = .{
