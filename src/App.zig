@@ -7,6 +7,12 @@ const ResourceManager = @import("ResourceManager.zig");
 
 const vertex_text_file = @embedFile("resources/pyramid.txt");
 
+const VertexAttr = struct {
+    position: [3]f32,
+    normal: [3]f32,
+    color: [3]f32,
+};
+
 const MyUniforms = struct {
     projection: zmath.Mat = undefined,
     view: zmath.Mat = undefined,
@@ -56,10 +62,10 @@ pub fn init(allocator: std.mem.Allocator) !*App {
         .fn_getCocoaWindow = @ptrCast(&zglfw.getCocoaWindow),
     }, .{ .required_limits = &zgpu.wgpu.RequiredLimits{
         .limits = .{
-            .max_vertex_attributes = 2,
+            .max_vertex_attributes = 3,
             .max_vertex_buffers = 1,
-            .max_buffer_size = 15 * 5 * @sizeOf(f32),
-            .max_vertex_buffer_array_stride = 6 * @sizeOf(f32),
+            .max_buffer_size = 16 * @sizeOf(VertexAttr),
+            .max_vertex_buffer_array_stride = @sizeOf(VertexAttr),
             .max_inter_stage_shader_components = 3,
             .max_bind_groups = 1,
             .max_uniform_buffers_per_shader_stage = 1,
@@ -68,6 +74,7 @@ pub fn init(allocator: std.mem.Allocator) !*App {
             .max_texture_dimension_1d = 640,
             .max_texture_dimension_2d = 480,
             .max_texture_array_layers = 1,
+            .max_inter_stage_shader_variables = 6,
         },
     } });
 
@@ -101,7 +108,7 @@ fn initializeBuffers(self: *App) !void {
         vertex_text_file,
         &point_data,
         &index_data,
-        3,
+        6,
     );
     self.index_count = @intCast(index_data.items.len);
 
@@ -139,23 +146,9 @@ fn initializeBuffers(self: *App) !void {
 }
 
 pub fn run(self: *App) !void {
-    const scale = zmath.matFromArr(.{
-        0.3, 0.0, 0.0, 0.0,
-        0.0, 0.3, 0.0, 0.0,
-        0.0, 0.0, 0.3, 0.0,
-        0.0, 0.0, 0.0, 1.0,
-    });
-
-    const translation = zmath.matFromArr(.{
-        1.0, 0.0, 0.0, 0.5,
-        0.0, 1.0, 0.0, 0.0,
-        0.0, 0.0, 1.0, 0.0,
-        0.0, 0.0, 0.0, 1.0,
-    });
-
     // Create a proper view matrix using lookAt
-    // Eye position (camera position), target (where we're looking), and up vector
-    const eye_pos = zmath.f32x4(0.0, 0.0, 2.0, 1.0);
+    // Position camera further away and at an angle for isometric-like view
+    const eye_pos = zmath.f32x4(3.0, 3.0, 5.0, 1.0); // Moved back and up for isometric view
     const target_pos = zmath.f32x4(0.0, 0.0, 0.0, 1.0);
     const up_vec = zmath.f32x4(0.0, 1.0, 0.0, 0.0);
 
@@ -166,7 +159,7 @@ pub fn run(self: *App) !void {
 
     // Projection parameters
     const near = 0.1;
-    const far = 10.0;
+    const far = 20.0; // Increased far plane for larger viewing distance
     // Use the perspectiveFovRh function which creates a right-handed perspective matrix
     // with depth range [0,1] appropriate for WebGPU (unlike OpenGL's [-1,1])
     self.my_uniforms.projection = zmath.perspectiveFovRh(
@@ -177,16 +170,6 @@ pub fn run(self: *App) !void {
     );
     // The above generates a right-handed perspective matrix with depth range [0,1]
 
-    // Initial angle for model rotation around Z axis
-    const angle1: f32 = 0.0;
-
-    // Create rotation matrices - initialized here, updated in loop
-    const R1 = zmath.rotationZ(angle1);
-
-    // Compute model and view matrices
-    // Since zmath is row-major and GLM is column-major, we reverse the order
-    self.my_uniforms.model = zmath.transpose(zmath.mul(scale, zmath.mul(translation, R1)));
-
     // Main render loop
     while (!self.window.shouldClose()) {
         self.gfx.device.tick();
@@ -194,16 +177,34 @@ pub fn run(self: *App) !void {
 
         const time = @as(f32, @floatCast(self.gfx.stats.time));
         self.my_uniforms.time = time;
-        self.my_uniforms.color = .{ 0.0, 1.0, 0.4, 1.0 }; // Green tint as in tutorial
 
-        // Create rotation matrix using zmath's built-in function
-        // This creates a rotation around Y axis
-        const rotation_y = zmath.rotationY(time);
+        // Set orbital radius
+        const orbit_radius = 2.0;
 
-        // Stack the transformations in the right order:
-        // First scale, then rotate, then translate
-        // For row-major matrices (zmath), we multiply from right to left (opposite of GLM)
-        self.my_uniforms.model = zmath.mul(zmath.mul(translation, rotation_y), scale);
+        // Calculate orbital angle based on time
+        const orbit_angle = time * 0.5; // Orbital speed
+
+        // Calculate position for orbit around Z axis (motion in XY plane)
+        const orbit_x = orbit_radius * @cos(orbit_angle);
+        const orbit_y = orbit_radius * @sin(orbit_angle); // Changed from Z to Y for XY plane motion
+
+        // Start with identity matrix
+        var model = zmath.identity();
+
+        // 1. First apply scale
+        model = zmath.mul(model, zmath.scaling(0.6, 0.6, 0.6));
+
+        // 2. Apply self-rotation around Z axis (as specified in C code)
+        // This is the rotation in XY plane
+        model = zmath.mul(model, zmath.rotationZ(time));
+
+        // 3. Apply orientation to make pyramid point up (Y axis)
+        model = zmath.mul(model, zmath.rotationX(-std.math.pi / 2.0));
+
+        // 4. Translate to orbital position in XY plane
+        model = zmath.mul(model, zmath.translation(orbit_x, orbit_y, 0.0));
+
+        self.my_uniforms.model = model;
 
         // Allocate and update the entire uniform struct
         const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
@@ -314,17 +315,24 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .offset = 0,
     };
 
-    const color_attribute = zgpu.wgpu.VertexAttribute{
+    const normal_attribute = zgpu.wgpu.VertexAttribute{
         .shader_location = 1,
         .format = .float32x3,
         .offset = 3 * @sizeOf(f32),
     };
 
+    const color_attribute = zgpu.wgpu.VertexAttribute{
+        .shader_location = 2,
+        .format = .float32x3,
+        .offset = 3 * @sizeOf(f32),
+    };
+
     const vertex_buffer_layout = zgpu.wgpu.VertexBufferLayout{
-        .array_stride = 6 * @sizeOf(f32),
-        .attribute_count = 2,
+        .array_stride = 9 * @sizeOf(f32),
+        .attribute_count = 3,
         .attributes = &[_]zgpu.wgpu.VertexAttribute{
             position_attribute,
+            normal_attribute,
             color_attribute,
         },
     };
