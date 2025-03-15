@@ -2,6 +2,7 @@ const std = @import("std");
 const zglfw = @import("zglfw");
 const zgpu = @import("zgpu");
 const zmath = @import("zmath");
+const obj = @import("obj");
 
 const ResourceManager = @import("ResourceManager.zig");
 
@@ -64,7 +65,7 @@ pub fn init(allocator: std.mem.Allocator) !*App {
         .limits = .{
             .max_vertex_attributes = 3,
             .max_vertex_buffers = 1,
-            .max_buffer_size = 16 * @sizeOf(VertexAttr),
+            .max_buffer_size = 10000 * @sizeOf(VertexAttr),
             .max_vertex_buffer_array_stride = @sizeOf(VertexAttr),
             .max_inter_stage_shader_components = 3,
             .max_bind_groups = 1,
@@ -99,17 +100,18 @@ pub fn deinit(self: *App) void {
 }
 
 fn initializeBuffers(self: *App) !void {
+    // Load the OBJ model instead of using the text file
+    var obj_model = try obj.parseObj(self.allocator, @embedFile("resources/mammoth.obj"));
+    defer obj_model.deinit(self.allocator);
+
+    // Create vertex and index data arrays to hold the converted data
     var point_data = std.ArrayList(f32).init(self.allocator);
-    var index_data = std.ArrayList(u16).init(self.allocator);
+    var index_data = std.ArrayList(u32).init(self.allocator);
     defer point_data.deinit();
     defer index_data.deinit();
 
-    try ResourceManager.loadGeometry(
-        vertex_text_file,
-        &point_data,
-        &index_data,
-        6,
-    );
+    // Process the OBJ data and fill the point_data and index_data arrays
+    try processObjData(obj_model, &point_data, &index_data);
     self.index_count = @intCast(index_data.items.len);
 
     var buffer_desc = zgpu.wgpu.BufferDescriptor{
@@ -126,7 +128,7 @@ fn initializeBuffers(self: *App) !void {
 
     // Now the index buffer, reusing the buffer descriptor
     buffer_desc.label = "Index Buffer";
-    buffer_desc.size = index_data.items.len * @sizeOf(u16);
+    buffer_desc.size = index_data.items.len * @sizeOf(u32);
     // round size to the nearest multiple of 4
     buffer_desc.size = (buffer_desc.size + 3) & ~@as(u64, 3);
     buffer_desc.usage = .{ .copy_dst = true, .index = true };
@@ -134,15 +136,15 @@ fn initializeBuffers(self: *App) !void {
 
     if (index_data.items.len != buffer_desc.size) {
         // Pad index_data to the nearest multiple of 4
-        const padding = buffer_desc.size - (index_data.items.len * @sizeOf(u16));
-        const padding_data = try self.allocator.alloc(u16, padding / @sizeOf(u16));
+        const padding = buffer_desc.size - (index_data.items.len * @sizeOf(u32));
+        const padding_data = try self.allocator.alloc(u32, padding / @sizeOf(u32));
         @memset(padding_data, 0);
         defer self.allocator.free(padding_data);
         try index_data.appendSlice(padding_data);
     }
 
     // First submit the write operation
-    self.gfx.queue.writeBuffer(self.index_buffer, 0, u16, index_data.items);
+    self.gfx.queue.writeBuffer(self.index_buffer, 0, u32, index_data.items);
 }
 
 pub fn run(self: *App) !void {
@@ -192,7 +194,7 @@ pub fn run(self: *App) !void {
         var model = zmath.identity();
 
         // 1. First apply scale
-        model = zmath.mul(model, zmath.scaling(0.6, 0.6, 0.6));
+        model = zmath.mul(model, zmath.scaling(0.9, 0.9, 0.9));
 
         // 2. Apply self-rotation around Z axis (as specified in C code)
         // This is the rotation in XY plane
@@ -250,7 +252,7 @@ pub fn run(self: *App) !void {
         pass.setPipeline(pipeline);
 
         pass.setVertexBuffer(0, self.point_buffer, 0, self.point_buffer.getSize());
-        pass.setIndexBuffer(self.index_buffer, .uint16, 0, self.index_buffer.getSize());
+        pass.setIndexBuffer(self.index_buffer, .uint32, 0, self.index_buffer.getSize());
 
         pass.setBindGroup(0, bind_group, null);
 
@@ -400,4 +402,75 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .offset = 0,
         .size = @sizeOf(MyUniforms),
     }});
+}
+
+// Helper function to process OBJ data and convert it to our expected format
+fn processObjData(model: obj.ObjData, point_data: *std.ArrayList(f32), index_data: *std.ArrayList(u32)) !void {
+    // Clear existing data
+    point_data.clearRetainingCapacity();
+    index_data.clearRetainingCapacity();
+
+    // Process each mesh in the OBJ model
+    for (model.meshes) |mesh| {
+        var face_start: usize = 0;
+
+        // Process each face in the mesh (using num_vertices to determine faces)
+        for (mesh.num_vertices) |num_verts_in_face| {
+            // Handle triangles and quads (or faces with more vertices)
+            for (1..num_verts_in_face - 1) |i| {
+                // For each triangle in the face, process 3 vertices
+                // First vertex is always at face_start
+                // The other two form the triangle (like a triangle fan)
+                const indices_to_process = [_]usize{ face_start, face_start + i, face_start + i + 1 };
+
+                for (indices_to_process) |idx| {
+                    const mesh_index = mesh.indices[idx];
+
+                    // Get position data if available
+                    var px: f32 = 0.0;
+                    var py: f32 = 0.0;
+                    var pz: f32 = 0.0;
+
+                    if (mesh_index.vertex) |vertex_idx| {
+                        if (vertex_idx * 3 + 2 < model.vertices.len) {
+                            // OBJ uses Y-up convention, but our code uses Z-up
+                            // So we need to convert: (x, y, z) -> (x, z, -y)
+                            px = model.vertices[vertex_idx * 3]; // x stays the same
+                            // Swap y and z and negate new y (previously z) for orientation
+                            py = -model.vertices[vertex_idx * 3 + 2]; // new y = old z
+                            pz = model.vertices[vertex_idx * 3 + 1]; // new z = -old y
+                        }
+                    }
+
+                    // Get normal data if available
+                    var nx: f32 = 0.0;
+                    var ny: f32 = 0.0;
+                    var nz: f32 = 0.0;
+
+                    if (mesh_index.normal) |normal_idx| {
+                        if (normal_idx * 3 + 2 < model.normals.len) {
+                            // Also transform normal vectors using the same conversion
+                            nx = model.normals[normal_idx * 3]; // x stays the same
+                            ny = -model.normals[normal_idx * 3 + 2]; // new y = old z
+                            nz = model.normals[normal_idx * 3 + 1]; // new z = -old y
+                        }
+                    }
+
+                    // Use white as default color (you could use materials if needed)
+                    const r: f32 = 1.0;
+                    const g: f32 = 1.0;
+                    const b: f32 = 1.0;
+
+                    // Add position, normal, and color to the point data
+                    try point_data.appendSlice(&[_]f32{ px, py, pz, nx, ny, nz, r, g, b });
+
+                    // Add index - we're creating a new vertex for each vertex, so indices are sequential
+                    try index_data.append(@as(u32, @intCast(point_data.items.len / 9 - 1)));
+                }
+            }
+
+            // Move to the next face
+            face_start += num_verts_in_face;
+        }
+    }
 }

@@ -21,6 +21,10 @@
             .url = "git+https://github.com/zig-gamedev/zmath#f40bb8a935b4878c707c3fccfd5c234cfcb43bf2",
             .hash = "1220c1ab7d1e49106f59c6adb4004befdb95525a72056364a663757aaa1365aae64a",
         },
+        .obj = .{
+            .url = "git+https://github.com/chip2n/zig-obj?ref=v2.0.0#7c69a655c58c12530c166ba40e9e4ed30d8123f0",
+            .hash = "12206ad647f7dc54ca49a9c89c79b4bec1572d7fbf7d4878ed33c953c3f0b92ab3bc",
+        },
     },
 
     .paths = .{
