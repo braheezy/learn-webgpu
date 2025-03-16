@@ -35,6 +35,8 @@ index_count: u32 = 0,
 bind_group: zgpu.BindGroupHandle = undefined,
 depth_texture: zgpu.TextureHandle = undefined,
 depth_view: zgpu.TextureViewHandle = undefined,
+texture: zgpu.TextureHandle = undefined,
+texture_view: zgpu.TextureViewHandle = undefined,
 my_uniforms: MyUniforms = .{},
 
 pub fn init(allocator: std.mem.Allocator) !*App {
@@ -67,15 +69,15 @@ pub fn init(allocator: std.mem.Allocator) !*App {
             .max_vertex_buffers = 1,
             .max_buffer_size = 10000 * @sizeOf(VertexAttr),
             .max_vertex_buffer_array_stride = @sizeOf(VertexAttr),
-            .max_inter_stage_shader_components = 3,
+            .max_inter_stage_shader_components = 6,
             .max_bind_groups = 1,
             .max_uniform_buffers_per_shader_stage = 1,
             .max_uniform_buffer_binding_size = 16 * 4 * @sizeOf(f32),
             .max_dynamic_uniform_buffers_per_pipeline_layout = 1,
-            .max_texture_dimension_1d = 640,
-            .max_texture_dimension_2d = 480,
+            .max_texture_dimension_1d = 480,
+            .max_texture_dimension_2d = 640,
             .max_texture_array_layers = 1,
-            .max_inter_stage_shader_variables = 6,
+            .max_sampled_textures_per_shader_stage = 1,
         },
     } });
 
@@ -91,6 +93,8 @@ pub fn deinit(self: *App) void {
     self.gfx.releaseResource(self.depth_texture);
     self.gfx.destroyResource(self.depth_texture);
     self.gfx.releaseResource(self.depth_view);
+    self.gfx.releaseResource(self.texture);
+    self.gfx.destroyResource(self.texture);
 
     self.gfx.destroy(self.allocator);
 
@@ -101,7 +105,7 @@ pub fn deinit(self: *App) void {
 
 fn initializeBuffers(self: *App) !void {
     // Load the OBJ model instead of using the text file
-    var obj_model = try obj.parseObj(self.allocator, @embedFile("resources/mammoth.obj"));
+    var obj_model = try obj.parseObj(self.allocator, @embedFile("resources/plane.obj"));
     defer obj_model.deinit(self.allocator);
 
     // Create vertex and index data arrays to hold the converted data
@@ -148,29 +152,63 @@ fn initializeBuffers(self: *App) !void {
 }
 
 pub fn run(self: *App) !void {
-    // Create a proper view matrix using lookAt
-    // Position camera further away and at an angle for isometric-like view
-    const eye_pos = zmath.f32x4(3.0, 3.0, 5.0, 1.0); // Moved back and up for isometric view
-    const target_pos = zmath.f32x4(0.0, 0.0, 0.0, 1.0);
-    const up_vec = zmath.f32x4(0.0, 1.0, 0.0, 0.0);
 
     // Create right-handed view matrix
-    self.my_uniforms.view = zmath.lookAtRh(eye_pos, target_pos, up_vec);
+    self.my_uniforms.view = zmath.scaling(1.0, 1.0, 1.0);
 
-    const ratio = 640.0 / 480.0;
+    self.my_uniforms.projection = zmath.orthographicRh(2, 2, -1, 1);
 
-    // Projection parameters
-    const near = 0.1;
-    const far = 20.0; // Increased far plane for larger viewing distance
-    // Use the perspectiveFovRh function which creates a right-handed perspective matrix
-    // with depth range [0,1] appropriate for WebGPU (unlike OpenGL's [-1,1])
-    self.my_uniforms.projection = zmath.perspectiveFovRh(
-        std.math.pi / 4.0,
-        ratio,
-        near,
-        far,
+    const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
+
+    const depth_attachment = zgpu.wgpu.RenderPassDepthStencilAttachment{
+        .view = depth_view,
+        .depth_clear_value = 1.0,
+        .depth_load_op = .clear,
+        .depth_store_op = .store,
+        .depth_read_only = .false,
+        .stencil_clear_value = 0,
+        .stencil_load_op = .undef,
+        .stencil_store_op = .undef,
+        .stencil_read_only = .true,
+    };
+
+    // Consistently get texture size from where we defined it
+    const texture: zgpu.wgpu.Texture = self.gfx.lookupResource(self.texture) orelse unreachable;
+    const texture_width: u32 = 512;
+    const texture_height: u32 = 512;
+
+    const texure_pixels = try makePixels(self.allocator, texture_width, texture_height);
+    defer self.allocator.free(texure_pixels);
+
+    const destination = zgpu.wgpu.ImageCopyTexture{
+        .texture = texture,
+        .mip_level = 0,
+        .origin = .{ .x = 0, .y = 0, .z = 0 },
+        .aspect = .all,
+    };
+
+    const data_layout = zgpu.wgpu.TextureDataLayout{
+        .offset = 0,
+        .bytes_per_row = 4 * texture_width,
+        .rows_per_image = texture_height,
+    };
+
+    const copy_size = zgpu.wgpu.Extent3D{
+        .width = texture_width,
+        .height = texture_height,
+        .depth_or_array_layers = 1,
+    };
+
+    self.gfx.queue.writeTexture(
+        destination,
+        data_layout,
+        copy_size,
+        u8,
+        texure_pixels,
     );
-    // The above generates a right-handed perspective matrix with depth range [0,1]
+
+    const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
+    const bind_group = self.gfx.lookupResource(self.bind_group) orelse unreachable;
 
     // Main render loop
     while (!self.window.shouldClose()) {
@@ -180,33 +218,7 @@ pub fn run(self: *App) !void {
         const time = @as(f32, @floatCast(self.gfx.stats.time));
         self.my_uniforms.time = time;
 
-        // Set orbital radius
-        const orbit_radius = 2.0;
-
-        // Calculate orbital angle based on time
-        const orbit_angle = time * 0.5; // Orbital speed
-
-        // Calculate position for orbit around Z axis (motion in XY plane)
-        const orbit_x = orbit_radius * @cos(orbit_angle);
-        const orbit_y = orbit_radius * @sin(orbit_angle); // Changed from Z to Y for XY plane motion
-
-        // Start with identity matrix
-        var model = zmath.identity();
-
-        // 1. First apply scale
-        model = zmath.mul(model, zmath.scaling(0.9, 0.9, 0.9));
-
-        // 2. Apply self-rotation around Z axis (as specified in C code)
-        // This is the rotation in XY plane
-        model = zmath.mul(model, zmath.rotationZ(time));
-
-        // 3. Apply orientation to make pyramid point up (Y axis)
-        model = zmath.mul(model, zmath.rotationX(-std.math.pi / 2.0));
-
-        // 4. Translate to orbital position in XY plane
-        model = zmath.mul(model, zmath.translation(orbit_x, orbit_y, 0.0));
-
-        self.my_uniforms.model = model;
+        self.my_uniforms.model = zmath.identity();
 
         // Allocate and update the entire uniform struct
         const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
@@ -215,29 +227,12 @@ pub fn run(self: *App) !void {
         const view = self.gfx.swapchain.getCurrentTextureView();
         defer view.release();
 
-        const encoder = self.gfx.device.createCommandEncoder(null);
-        defer encoder.release();
-
         const color_attachment = [_]zgpu.wgpu.RenderPassColorAttachment{.{
             .view = view,
             .load_op = .clear,
             .store_op = .store,
-            .clear_value = .{ .r = 0.2, .g = 0.2, .b = 0.2, .a = 1.0 },
+            .clear_value = .{ .r = 0.05, .g = 0.05, .b = 0.05, .a = 1.0 },
         }};
-
-        const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
-
-        const depth_attachment = zgpu.wgpu.RenderPassDepthStencilAttachment{
-            .view = depth_view,
-            .depth_clear_value = 1.0,
-            .depth_load_op = .clear,
-            .depth_store_op = .store,
-            .depth_read_only = .false,
-            .stencil_clear_value = 0,
-            .stencil_load_op = .undef,
-            .stencil_store_op = .undef,
-            .stencil_read_only = .true,
-        };
 
         const render_pass_info = zgpu.wgpu.RenderPassDescriptor{
             .color_attachments = &color_attachment,
@@ -245,9 +240,10 @@ pub fn run(self: *App) !void {
             .depth_stencil_attachment = &depth_attachment,
         };
 
+        const encoder = self.gfx.device.createCommandEncoder(null);
+        defer encoder.release();
+
         const pass = encoder.beginRenderPass(render_pass_info);
-        const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
-        const bind_group = self.gfx.lookupResource(self.bind_group) orelse unreachable;
 
         pass.setPipeline(pipeline);
 
@@ -286,6 +282,14 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
             .buffer = .{
                 .binding_type = .uniform,
                 .min_binding_size = @sizeOf(MyUniforms),
+            },
+        },
+        .{
+            .binding = 1,
+            .visibility = .{ .fragment = true },
+            .texture = .{
+                .sample_type = .float,
+                .view_dimension = .tvdim_2d,
             },
         },
     });
@@ -347,6 +351,33 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .stencil_write_mask = 0,
     };
 
+    const texture_desc = zgpu.wgpu.TextureDescriptor{
+        .dimension = .tdim_2d,
+        .format = .rgba8_unorm,
+        .mip_level_count = 1,
+        .sample_count = 1,
+        .size = .{
+            .width = self.gfx.swapchain_descriptor.width,
+            .height = self.gfx.swapchain_descriptor.height,
+            .depth_or_array_layers = 1,
+        },
+        .usage = .{ .texture_binding = true, .copy_dst = true },
+        .view_format_count = 0,
+        .view_formats = null,
+    };
+
+    self.texture = self.gfx.createTexture(texture_desc);
+
+    self.texture_view = self.gfx.createTextureView(self.texture, .{
+        .aspect = .all,
+        .base_array_layer = 0,
+        .array_layer_count = 1,
+        .base_mip_level = 0,
+        .mip_level_count = 1,
+        .dimension = .tvdim_2d,
+        .format = .rgba8_unorm,
+    });
+
     // texture for the depth buffer
     self.depth_texture = self.gfx.createTexture(.{
         .dimension = .tdim_2d,
@@ -396,12 +427,18 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
 
     self.pipeline = self.gfx.createRenderPipeline(pipeline_layout, pipeline_desc);
 
-    self.bind_group = self.gfx.createBindGroup(bind_group_layout, &.{.{
-        .binding = 0,
-        .buffer_handle = self.gfx.uniforms.buffer,
-        .offset = 0,
-        .size = @sizeOf(MyUniforms),
-    }});
+    self.bind_group = self.gfx.createBindGroup(bind_group_layout, &.{
+        .{
+            .binding = 0,
+            .buffer_handle = self.gfx.uniforms.buffer,
+            .offset = 0,
+            .size = @sizeOf(MyUniforms),
+        },
+        .{
+            .binding = 1,
+            .texture_view_handle = self.texture_view,
+        },
+    });
 }
 
 // Helper function to process OBJ data and convert it to our expected format
@@ -473,4 +510,32 @@ fn processObjData(model: obj.ObjData, point_data: *std.ArrayList(f32), index_dat
             face_start += num_verts_in_face;
         }
     }
+}
+
+/// Creates a slice of pixels for texture data
+/// Caller is responsible for freeing the returned slice with allocator.free()
+fn makePixels(allocator: std.mem.Allocator, width: u32, height: u32) ![]u8 {
+    // Allocate memory for the pixel data (4 bytes per pixel: R, G, B, A)
+    const pixel_count = width * height;
+    const pixels = try allocator.alloc(u8, 4 * pixel_count);
+
+    // Fill the pixel data
+    for (0..width) |i_unsigned| {
+        for (0..height) |j_unsigned| {
+            // Convert to signed to avoid underflow
+            const i: i32 = @intCast(i_unsigned);
+            const j: i32 = @intCast(j_unsigned);
+
+            // Calculate the pixel index in the buffer
+            const pixel_index = 4 * (j_unsigned * width + i_unsigned);
+
+            // Set RGBA values using signed arithmetic
+            pixels[pixel_index + 0] = if (@mod(@divFloor(i, 16), 2) == @mod(@divFloor(j, 16), 2)) 255 else 0;
+            pixels[pixel_index + 1] = if (@mod(@divFloor(i - j, 16), 2) == 0) 255 else 0;
+            pixels[pixel_index + 2] = if (@mod(@divFloor(i + j, 16), 2) == 0) 255 else 0;
+            pixels[pixel_index + 3] = 255; // A - fully opaque
+        }
+    }
+
+    return pixels;
 }
