@@ -12,6 +12,7 @@ const VertexAttr = struct {
     position: [3]f32,
     normal: [3]f32,
     color: [3]f32,
+    uv: [2]f32,
 };
 
 const MyUniforms = struct {
@@ -65,11 +66,11 @@ pub fn init(allocator: std.mem.Allocator) !*App {
         .fn_getCocoaWindow = @ptrCast(&zglfw.getCocoaWindow),
     }, .{ .required_limits = &zgpu.wgpu.RequiredLimits{
         .limits = .{
-            .max_vertex_attributes = 3,
+            .max_vertex_attributes = 4,
             .max_vertex_buffers = 1,
             .max_buffer_size = 10000 * @sizeOf(VertexAttr),
             .max_vertex_buffer_array_stride = @sizeOf(VertexAttr),
-            .max_inter_stage_shader_components = 6,
+            .max_inter_stage_shader_components = 8,
             .max_bind_groups = 1,
             .max_uniform_buffers_per_shader_stage = 1,
             .max_uniform_buffer_binding_size = 16 * 4 * @sizeOf(f32),
@@ -105,7 +106,7 @@ pub fn deinit(self: *App) void {
 
 fn initializeBuffers(self: *App) !void {
     // Load the OBJ model instead of using the text file
-    var obj_model = try obj.parseObj(self.allocator, @embedFile("resources/plane.obj"));
+    var obj_model = try obj.parseObj(self.allocator, @embedFile("resources/cube.obj"));
     defer obj_model.deinit(self.allocator);
 
     // Create vertex and index data arrays to hold the converted data
@@ -151,12 +152,27 @@ fn initializeBuffers(self: *App) !void {
     self.gfx.queue.writeBuffer(self.index_buffer, 0, u32, index_data.items);
 }
 
+fn toRadians(degrees: f32) f32 {
+    return degrees * std.math.pi / 180.0;
+}
+
 pub fn run(self: *App) !void {
 
     // Create right-handed view matrix
-    self.my_uniforms.view = zmath.scaling(1.0, 1.0, 1.0);
+    self.my_uniforms.view = zmath.lookAtLh(
+        zmath.loadArr3(.{ -2.0, -3.0, 2.0 }),
+        zmath.loadArr3(.{ 0, 0, 0 }),
+        zmath.loadArr3(.{ 0, 0, 1 }),
+    );
 
-    self.my_uniforms.projection = zmath.orthographicRh(2, 2, -1, 1);
+    self.my_uniforms.projection = zmath.perspectiveFovLh(
+        toRadians(45.0),
+        640.0 / 480.0,
+        0.01,
+        100,
+    );
+
+    self.my_uniforms.model = zmath.identity();
 
     const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
 
@@ -174,11 +190,14 @@ pub fn run(self: *App) !void {
 
     // Consistently get texture size from where we defined it
     const texture: zgpu.wgpu.Texture = self.gfx.lookupResource(self.texture) orelse unreachable;
-    const texture_width: u32 = 512;
-    const texture_height: u32 = 512;
 
-    const texure_pixels = try makePixels(self.allocator, texture_width, texture_height);
-    defer self.allocator.free(texure_pixels);
+    // Define texture dimensions as constants to ensure consistency
+    const texture_width: u32 = 256;
+    const texture_height: u32 = 256;
+
+    // Create texture data with a clear checkerboard pattern
+    const texture_pixels = try makePixels(self.allocator, texture_width, texture_height);
+    defer self.allocator.free(texture_pixels);
 
     const destination = zgpu.wgpu.ImageCopyTexture{
         .texture = texture,
@@ -204,7 +223,7 @@ pub fn run(self: *App) !void {
         data_layout,
         copy_size,
         u8,
-        texure_pixels,
+        texture_pixels,
     );
 
     const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
@@ -218,8 +237,6 @@ pub fn run(self: *App) !void {
         const time = @as(f32, @floatCast(self.gfx.stats.time));
         self.my_uniforms.time = time;
 
-        self.my_uniforms.model = zmath.identity();
-
         // Allocate and update the entire uniform struct
         const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
         uni_mem.slice[0] = self.my_uniforms;
@@ -231,7 +248,7 @@ pub fn run(self: *App) !void {
             .view = view,
             .load_op = .clear,
             .store_op = .store,
-            .clear_value = .{ .r = 0.05, .g = 0.05, .b = 0.05, .a = 1.0 },
+            .clear_value = .{ .r = 0.5, .g = 0.5, .b = 0.5, .a = 1.0 },
         }};
 
         const render_pass_info = zgpu.wgpu.RenderPassDescriptor{
@@ -324,22 +341,29 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
     const normal_attribute = zgpu.wgpu.VertexAttribute{
         .shader_location = 1,
         .format = .float32x3,
-        .offset = 3 * @sizeOf(f32),
+        .offset = @offsetOf(VertexAttr, "normal"),
     };
 
     const color_attribute = zgpu.wgpu.VertexAttribute{
         .shader_location = 2,
         .format = .float32x3,
-        .offset = 3 * @sizeOf(f32),
+        .offset = @offsetOf(VertexAttr, "color"),
+    };
+
+    const uv_attribute = zgpu.wgpu.VertexAttribute{
+        .shader_location = 3,
+        .format = .float32x2,
+        .offset = @offsetOf(VertexAttr, "uv"),
     };
 
     const vertex_buffer_layout = zgpu.wgpu.VertexBufferLayout{
-        .array_stride = 9 * @sizeOf(f32),
-        .attribute_count = 3,
+        .array_stride = 11 * @sizeOf(f32),
+        .attribute_count = 4,
         .attributes = &[_]zgpu.wgpu.VertexAttribute{
             position_attribute,
             normal_attribute,
             color_attribute,
+            uv_attribute,
         },
     };
 
@@ -357,8 +381,8 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .mip_level_count = 1,
         .sample_count = 1,
         .size = .{
-            .width = self.gfx.swapchain_descriptor.width,
-            .height = self.gfx.swapchain_descriptor.height,
+            .width = 256, // Use consistent texture dimensions
+            .height = 256, // Use consistent texture dimensions
             .depth_or_array_layers = 1,
         },
         .usage = .{ .texture_binding = true, .copy_dst = true },
@@ -471,11 +495,9 @@ fn processObjData(model: obj.ObjData, point_data: *std.ArrayList(f32), index_dat
                     if (mesh_index.vertex) |vertex_idx| {
                         if (vertex_idx * 3 + 2 < model.vertices.len) {
                             // OBJ uses Y-up convention, but our code uses Z-up
-                            // So we need to convert: (x, y, z) -> (x, z, -y)
-                            px = model.vertices[vertex_idx * 3]; // x stays the same
-                            // Swap y and z and negate new y (previously z) for orientation
-                            py = -model.vertices[vertex_idx * 3 + 2]; // new y = old z
-                            pz = model.vertices[vertex_idx * 3 + 1]; // new z = -old y
+                            px = model.vertices[vertex_idx * 3];
+                            py = -model.vertices[vertex_idx * 3 + 2];
+                            pz = model.vertices[vertex_idx * 3 + 1];
                         }
                     }
 
@@ -486,23 +508,40 @@ fn processObjData(model: obj.ObjData, point_data: *std.ArrayList(f32), index_dat
 
                     if (mesh_index.normal) |normal_idx| {
                         if (normal_idx * 3 + 2 < model.normals.len) {
-                            // Also transform normal vectors using the same conversion
-                            nx = model.normals[normal_idx * 3]; // x stays the same
-                            ny = -model.normals[normal_idx * 3 + 2]; // new y = old z
-                            nz = model.normals[normal_idx * 3 + 1]; // new z = -old y
+                            nx = model.normals[normal_idx * 3];
+                            ny = -model.normals[normal_idx * 3 + 2];
+                            nz = model.normals[normal_idx * 3 + 1];
                         }
                     }
 
-                    // Use white as default color (you could use materials if needed)
+                    // Use white as default color
                     const r: f32 = 1.0;
                     const g: f32 = 1.0;
                     const b: f32 = 1.0;
 
-                    // Add position, normal, and color to the point data
-                    try point_data.appendSlice(&[_]f32{ px, py, pz, nx, ny, nz, r, g, b });
+                    // Get texture coordinates if available - THIS IS CRITICAL
+                    var u: f32 = 0.0;
+                    var v: f32 = 0.0;
 
-                    // Add index - we're creating a new vertex for each vertex, so indices are sequential
-                    try index_data.append(@as(u32, @intCast(point_data.items.len / 9 - 1)));
+                    if (mesh_index.tex_coord) |uv_idx| {
+                        if (uv_idx * 2 + 1 < model.tex_coords.len) {
+                            // OBJ format stores UV with bottom-left origin (0,0)
+                            // Make sure U is clamped to [0,1] range
+                            u = @max(0.0, @min(1.0, model.tex_coords[uv_idx * 2]));
+                            // Flip V coordinate as OBJ format uses bottom-left origin
+                            // and we want top-left origin for WebGPU
+                            v = 1.0 - @max(0.0, @min(1.0, model.tex_coords[uv_idx * 2 + 1]));
+
+                            // Debug print - uncomment if needed
+                            // std.debug.print("UV: ({d}, {d})\n", .{ u, v });
+                        }
+                    }
+
+                    // Add position, normal, color and UV to the point data
+                    try point_data.appendSlice(&[_]f32{ px, py, pz, nx, ny, nz, r, g, b, u, v });
+
+                    // Add index
+                    try index_data.append(@as(u32, @intCast(point_data.items.len / 11 - 1)));
                 }
             }
 
