@@ -6,6 +6,7 @@ const obj = @import("obj");
 
 const ResourceManager = @import("ResourceManager.zig");
 
+const obj_file = @embedFile("resources/plane.obj");
 const vertex_text_file = @embedFile("resources/pyramid.txt");
 
 const VertexAttr = struct {
@@ -79,6 +80,7 @@ pub fn init(allocator: std.mem.Allocator) !*App {
             .max_texture_dimension_2d = 640,
             .max_texture_array_layers = 1,
             .max_sampled_textures_per_shader_stage = 1,
+            .max_samplers_per_shader_stage = 1,
         },
     } });
 
@@ -106,7 +108,7 @@ pub fn deinit(self: *App) void {
 
 fn initializeBuffers(self: *App) !void {
     // Load the OBJ model instead of using the text file
-    var obj_model = try obj.parseObj(self.allocator, @embedFile("resources/cube.obj"));
+    var obj_model = try obj.parseObj(self.allocator, obj_file);
     defer obj_model.deinit(self.allocator);
 
     // Create vertex and index data arrays to hold the converted data
@@ -194,37 +196,60 @@ pub fn run(self: *App) !void {
     // Define texture dimensions as constants to ensure consistency
     const texture_width: u32 = 256;
     const texture_height: u32 = 256;
+    const texture_mip_levels: u32 = 8;
 
-    // Create texture data with a clear checkerboard pattern
-    const texture_pixels = try makePixels(self.allocator, texture_width, texture_height);
-    defer self.allocator.free(texture_pixels);
-
-    const destination = zgpu.wgpu.ImageCopyTexture{
+    var destination = zgpu.wgpu.ImageCopyTexture{
         .texture = texture,
         .mip_level = 0,
         .origin = .{ .x = 0, .y = 0, .z = 0 },
         .aspect = .all,
     };
 
-    const data_layout = zgpu.wgpu.TextureDataLayout{
+    var data_layout = zgpu.wgpu.TextureDataLayout{
         .offset = 0,
         .bytes_per_row = 4 * texture_width,
         .rows_per_image = texture_height,
     };
 
-    const copy_size = zgpu.wgpu.Extent3D{
+    var mip_level_size: zgpu.wgpu.Extent3D = .{
         .width = texture_width,
         .height = texture_height,
         .depth_or_array_layers = 1,
     };
 
-    self.gfx.queue.writeTexture(
-        destination,
-        data_layout,
-        copy_size,
-        u8,
-        texture_pixels,
-    );
+    var level: u32 = 0;
+    var previous_pixels: ?[]u8 = null;
+    while (level < texture_mip_levels) : (level += 1) {
+        const texture_pixels = try makePixels(
+            self.allocator,
+            texture_width,
+            texture_height,
+            level,
+            previous_pixels,
+        );
+        defer self.allocator.free(texture_pixels);
+
+        if (previous_pixels) |pixels| {
+            self.allocator.free(pixels);
+        }
+        previous_pixels = try self.allocator.dupe(u8, texture_pixels);
+
+        destination.mip_level = level;
+        data_layout.bytes_per_row = 4 * mip_level_size.width;
+        data_layout.rows_per_image = mip_level_size.height;
+
+        self.gfx.queue.writeTexture(
+            destination,
+            data_layout,
+            mip_level_size,
+            u8,
+            texture_pixels,
+        );
+
+        mip_level_size.width /= 2;
+        mip_level_size.height /= 2;
+    }
+    self.allocator.free(previous_pixels.?);
 
     const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
     const bind_group = self.gfx.lookupResource(self.bind_group) orelse unreachable;
@@ -237,6 +262,15 @@ pub fn run(self: *App) !void {
         const time = @as(f32, @floatCast(self.gfx.stats.time));
         self.my_uniforms.time = time;
 
+        const v0: f32 = 0.0;
+        const v1: f32 = 0.25;
+        const viewZ = lerp(v0, v1, @cos(2.0 * std.math.pi * time / 4.0) * 0.5 + 0.5);
+        self.my_uniforms.view = zmath.lookAtLh(
+            zmath.loadArr3(.{ -0.5, -1.5, viewZ + 0.25 }),
+            zmath.loadArr3(.{ 0.0, 0.0, 0.0 }),
+            zmath.loadArr3(.{ 0.0, 0.0, 1.0 }),
+        );
+
         // Allocate and update the entire uniform struct
         const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
         uni_mem.slice[0] = self.my_uniforms;
@@ -248,7 +282,7 @@ pub fn run(self: *App) !void {
             .view = view,
             .load_op = .clear,
             .store_op = .store,
-            .clear_value = .{ .r = 0.5, .g = 0.5, .b = 0.5, .a = 1.0 },
+            .clear_value = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 1.0 },
         }};
 
         const render_pass_info = zgpu.wgpu.RenderPassDescriptor{
@@ -284,6 +318,10 @@ pub fn run(self: *App) !void {
     }
 }
 
+pub fn lerp(v0: f32, v1: f32, t: f32) f32 {
+    return v0 * (1.0 - t) + v1 * t;
+}
+
 fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
     const shader_module = try ResourceManager.loadShaderModule(
         allocator,
@@ -307,6 +345,13 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
             .texture = .{
                 .sample_type = .float,
                 .view_dimension = .tvdim_2d,
+            },
+        },
+        .{
+            .binding = 2,
+            .visibility = .{ .fragment = true },
+            .sampler = .{
+                .binding_type = .filtering,
             },
         },
     });
@@ -378,7 +423,7 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
     const texture_desc = zgpu.wgpu.TextureDescriptor{
         .dimension = .tdim_2d,
         .format = .rgba8_unorm,
-        .mip_level_count = 1,
+        .mip_level_count = 8,
         .sample_count = 1,
         .size = .{
             .width = 256, // Use consistent texture dimensions
@@ -397,7 +442,7 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .base_array_layer = 0,
         .array_layer_count = 1,
         .base_mip_level = 0,
-        .mip_level_count = 1,
+        .mip_level_count = 8,
         .dimension = .tvdim_2d,
         .format = .rgba8_unorm,
     });
@@ -426,6 +471,19 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .mip_level_count = 1,
         .dimension = .tvdim_2d,
         .format = .depth24_plus,
+    });
+
+    const sampler = self.gfx.createSampler(.{
+        .address_mode_u = .repeat,
+        .address_mode_v = .repeat,
+        .address_mode_w = .repeat,
+        .mag_filter = .linear,
+        .min_filter = .linear,
+        .mipmap_filter = .linear,
+        .lod_min_clamp = 0.0,
+        .lod_max_clamp = 8.0,
+        .compare = .undef,
+        .max_anisotropy = 1,
     });
 
     const pipeline_desc = zgpu.wgpu.RenderPipelineDescriptor{
@@ -461,6 +519,10 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .{
             .binding = 1,
             .texture_view_handle = self.texture_view,
+        },
+        .{
+            .binding = 2,
+            .sampler_handle = sampler,
         },
     });
 }
@@ -553,7 +615,17 @@ fn processObjData(model: obj.ObjData, point_data: *std.ArrayList(f32), index_dat
 
 /// Creates a slice of pixels for texture data
 /// Caller is responsible for freeing the returned slice with allocator.free()
-fn makePixels(allocator: std.mem.Allocator, width: u32, height: u32) ![]u8 {
+fn makePixels(
+    allocator: std.mem.Allocator,
+    base_width: u32,
+    base_height: u32,
+    level: u32,
+    previous_pixels: ?[]u8,
+) ![]u8 {
+    // Calculate the dimensions for this mip level
+    const width = base_width >> @intCast(level);
+    const height = base_height >> @intCast(level);
+
     // Allocate memory for the pixel data (4 bytes per pixel: R, G, B, A)
     const pixel_count = width * height;
     const pixels = try allocator.alloc(u8, 4 * pixel_count);
@@ -567,11 +639,32 @@ fn makePixels(allocator: std.mem.Allocator, width: u32, height: u32) ![]u8 {
 
             // Calculate the pixel index in the buffer
             const pixel_index = 4 * (j_unsigned * width + i_unsigned);
+            if (level == 0) {
+                // Set RGBA values using signed arithmetic
+                pixels[pixel_index + 0] = if (@mod(@divFloor(i, 16), 2) == @mod(@divFloor(j, 16), 2)) 255 else 0;
+                pixels[pixel_index + 1] = if (@mod(@divFloor(i - j, 16), 2) == 0) 255 else 0;
+                pixels[pixel_index + 2] = if (@mod(@divFloor(i + j, 16), 2) == 0) 255 else 0;
+            } else {
+                // For each pixel in the current level, we need to average a 2x2 block from the previous level
+                const prev_width = base_width >> @intCast(level - 1); // Width of the previous mip level
+                const prev_x = i_unsigned * 2; // Convert current coordinates to previous level coordinates
+                const prev_y = j_unsigned * 2;
 
-            // Set RGBA values using signed arithmetic
-            pixels[pixel_index + 0] = if (@mod(@divFloor(i, 16), 2) == @mod(@divFloor(j, 16), 2)) 255 else 0;
-            pixels[pixel_index + 1] = if (@mod(@divFloor(i - j, 16), 2) == 0) 255 else 0;
-            pixels[pixel_index + 2] = if (@mod(@divFloor(i + j, 16), 2) == 0) 255 else 0;
+                // Get the indices for each of the 4 pixels we need to average
+                const p00_idx = 4 * (prev_y * prev_width + prev_x);
+                const p01_idx = 4 * (prev_y * prev_width + prev_x + 1);
+                const p10_idx = 4 * ((prev_y + 1) * prev_width + prev_x);
+                const p11_idx = 4 * ((prev_y + 1) * prev_width + prev_x + 1);
+
+                // Average each RGB component separately
+                for (0..3) |component| {
+                    const sum = @as(u16, previous_pixels.?[p00_idx + component]) +
+                        @as(u16, previous_pixels.?[p01_idx + component]) +
+                        @as(u16, previous_pixels.?[p10_idx + component]) +
+                        @as(u16, previous_pixels.?[p11_idx + component]);
+                    pixels[pixel_index + component] = @truncate(sum / 4);
+                }
+            }
             pixels[pixel_index + 3] = 255; // A - fully opaque
         }
     }

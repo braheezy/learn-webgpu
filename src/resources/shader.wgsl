@@ -34,9 +34,12 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 	out.position = uMyUniforms.projectionMatrix * uMyUniforms.viewMatrix * uMyUniforms.modelMatrix * vec4f(in.position, 1.0);
     out.normal = (uMyUniforms.modelMatrix * vec4f(in.normal, 0.0)).xyz;
 	out.color = in.color;
-	out.uv = in.uv;
+	out.uv = in.uv * 6.0;
 	return out;
 }
+
+
+@group(0) @binding(2) var textureSampler: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
@@ -44,7 +47,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 	let texelCoords = vec2i(in.uv * vec2f(textureDimensions(gradientTexture)));
 
 	// And we fetch a texel from the texture
-	let color = textureLoad(gradientTexture, texelCoords, 0).rgb;
+    let color = textureSample(gradientTexture, textureSampler, in.uv).rgb;
 
 	return vec4f(color, uMyUniforms.color.a);
 }
