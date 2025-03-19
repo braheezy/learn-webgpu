@@ -27,6 +27,9 @@ pub fn build(b: *std.Build) void {
     const obj_mod = b.dependency("obj", .{ .target = target, .optimize = optimize });
     exe.root_module.addImport("obj", obj_mod.module("obj"));
 
+    const zjpeg = b.dependency("zjpeg", .{});
+    exe.root_module.addImport("zjpeg", zjpeg.module("jpeg"));
+
     if (target.result.os.tag != .emscripten) {
         exe.linkLibrary(zglfw.artifact("glfw"));
         exe.linkLibrary(zgpu.artifact("zdawn"));

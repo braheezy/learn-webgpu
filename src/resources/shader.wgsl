@@ -34,7 +34,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 	out.position = uMyUniforms.projectionMatrix * uMyUniforms.viewMatrix * uMyUniforms.modelMatrix * vec4f(in.position, 1.0);
     out.normal = (uMyUniforms.modelMatrix * vec4f(in.normal, 0.0)).xyz;
 	out.color = in.color;
-	out.uv = in.uv * 6.0;
+	out.uv = in.uv;
 	return out;
 }
 

@@ -25,6 +25,10 @@
             .url = "git+https://github.com/chip2n/zig-obj?ref=v2.0.0#7c69a655c58c12530c166ba40e9e4ed30d8123f0",
             .hash = "12206ad647f7dc54ca49a9c89c79b4bec1572d7fbf7d4878ed33c953c3f0b92ab3bc",
         },
+        .zjpeg = .{
+            .url = "git+https://github.com/braheezy/zjpeg#f0c4c61e3ad9922f82a3aba2b045d148ced6d4f3",
+            .hash = "1220eaff964706e892d2aa5a5d4a4a97b203778fa971e7f25600ca04da5edcf5389b",
+        },
     },
 
     .paths = .{

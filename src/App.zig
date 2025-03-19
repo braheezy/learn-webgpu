@@ -3,10 +3,11 @@ const zglfw = @import("zglfw");
 const zgpu = @import("zgpu");
 const zmath = @import("zmath");
 const obj = @import("obj");
+const jpeg = @import("zjpeg");
 
 const ResourceManager = @import("ResourceManager.zig");
 
-const obj_file = @embedFile("resources/plane.obj");
+const obj_file = @embedFile("resources/fourareen/fourareen.obj");
 const vertex_text_file = @embedFile("resources/pyramid.txt");
 
 const VertexAttr = struct {
@@ -38,7 +39,7 @@ bind_group: zgpu.BindGroupHandle = undefined,
 depth_texture: zgpu.TextureHandle = undefined,
 depth_view: zgpu.TextureViewHandle = undefined,
 texture: zgpu.TextureHandle = undefined,
-texture_view: zgpu.TextureViewHandle = undefined,
+texture_view: ?zgpu.TextureViewHandle,
 my_uniforms: MyUniforms = .{},
 
 pub fn init(allocator: std.mem.Allocator) !*App {
@@ -51,6 +52,7 @@ pub fn init(allocator: std.mem.Allocator) !*App {
     app.* = App{
         .allocator = allocator,
         .window = window,
+        .texture_view = null,
     };
 
     app.gfx = try zgpu.GraphicsContext.create(allocator, .{
@@ -65,24 +67,28 @@ pub fn init(allocator: std.mem.Allocator) !*App {
         .fn_getWaylandDisplay = @ptrCast(&zglfw.getWaylandDisplay),
         .fn_getWaylandSurface = @ptrCast(&zglfw.getWaylandWindow),
         .fn_getCocoaWindow = @ptrCast(&zglfw.getCocoaWindow),
-    }, .{ .required_limits = &zgpu.wgpu.RequiredLimits{
-        .limits = .{
-            .max_vertex_attributes = 4,
-            .max_vertex_buffers = 1,
-            .max_buffer_size = 10000 * @sizeOf(VertexAttr),
-            .max_vertex_buffer_array_stride = @sizeOf(VertexAttr),
-            .max_inter_stage_shader_components = 8,
-            .max_bind_groups = 1,
-            .max_uniform_buffers_per_shader_stage = 1,
-            .max_uniform_buffer_binding_size = 16 * 4 * @sizeOf(f32),
-            .max_dynamic_uniform_buffers_per_pipeline_layout = 1,
-            .max_texture_dimension_1d = 480,
-            .max_texture_dimension_2d = 640,
-            .max_texture_array_layers = 1,
-            .max_sampled_textures_per_shader_stage = 1,
-            .max_samplers_per_shader_stage = 1,
+    }, .{
+        .required_limits = &zgpu.wgpu.RequiredLimits{
+            .limits = .{
+                .max_vertex_attributes = 4,
+                .max_vertex_buffers = 1,
+                .max_buffer_size = 150000 * @sizeOf(VertexAttr),
+                .max_vertex_buffer_array_stride = @sizeOf(VertexAttr),
+                .max_inter_stage_shader_components = 8,
+                .max_bind_groups = 1,
+                .max_uniform_buffers_per_shader_stage = 1,
+                .max_uniform_buffer_binding_size = 16 * 4 * @sizeOf(f32),
+                .max_dynamic_uniform_buffers_per_pipeline_layout = 1,
+                .max_texture_dimension_1d = 2048,
+                .max_texture_dimension_2d = 2048,
+                .max_texture_array_layers = 1,
+                .max_sampled_textures_per_shader_stage = 1,
+                .max_samplers_per_shader_stage = 1,
+            },
         },
-    } });
+    });
+
+    try app.loadTexture("src/resources/fourareen/fourareen2K_albedo.jpg");
 
     try app.createPipeline(allocator);
 
@@ -159,14 +165,6 @@ fn toRadians(degrees: f32) f32 {
 }
 
 pub fn run(self: *App) !void {
-
-    // Create right-handed view matrix
-    self.my_uniforms.view = zmath.lookAtLh(
-        zmath.loadArr3(.{ -2.0, -3.0, 2.0 }),
-        zmath.loadArr3(.{ 0, 0, 0 }),
-        zmath.loadArr3(.{ 0, 0, 1 }),
-    );
-
     self.my_uniforms.projection = zmath.perspectiveFovLh(
         toRadians(45.0),
         640.0 / 480.0,
@@ -190,67 +188,6 @@ pub fn run(self: *App) !void {
         .stencil_read_only = .true,
     };
 
-    // Consistently get texture size from where we defined it
-    const texture: zgpu.wgpu.Texture = self.gfx.lookupResource(self.texture) orelse unreachable;
-
-    // Define texture dimensions as constants to ensure consistency
-    const texture_width: u32 = 256;
-    const texture_height: u32 = 256;
-    const texture_mip_levels: u32 = 8;
-
-    var destination = zgpu.wgpu.ImageCopyTexture{
-        .texture = texture,
-        .mip_level = 0,
-        .origin = .{ .x = 0, .y = 0, .z = 0 },
-        .aspect = .all,
-    };
-
-    var data_layout = zgpu.wgpu.TextureDataLayout{
-        .offset = 0,
-        .bytes_per_row = 4 * texture_width,
-        .rows_per_image = texture_height,
-    };
-
-    var mip_level_size: zgpu.wgpu.Extent3D = .{
-        .width = texture_width,
-        .height = texture_height,
-        .depth_or_array_layers = 1,
-    };
-
-    var level: u32 = 0;
-    var previous_pixels: ?[]u8 = null;
-    while (level < texture_mip_levels) : (level += 1) {
-        const texture_pixels = try makePixels(
-            self.allocator,
-            texture_width,
-            texture_height,
-            level,
-            previous_pixels,
-        );
-        defer self.allocator.free(texture_pixels);
-
-        if (previous_pixels) |pixels| {
-            self.allocator.free(pixels);
-        }
-        previous_pixels = try self.allocator.dupe(u8, texture_pixels);
-
-        destination.mip_level = level;
-        data_layout.bytes_per_row = 4 * mip_level_size.width;
-        data_layout.rows_per_image = mip_level_size.height;
-
-        self.gfx.queue.writeTexture(
-            destination,
-            data_layout,
-            mip_level_size,
-            u8,
-            texture_pixels,
-        );
-
-        mip_level_size.width /= 2;
-        mip_level_size.height /= 2;
-    }
-    self.allocator.free(previous_pixels.?);
-
     const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
     const bind_group = self.gfx.lookupResource(self.bind_group) orelse unreachable;
 
@@ -266,7 +203,7 @@ pub fn run(self: *App) !void {
         const v1: f32 = 0.25;
         const viewZ = lerp(v0, v1, @cos(2.0 * std.math.pi * time / 4.0) * 0.5 + 0.5);
         self.my_uniforms.view = zmath.lookAtLh(
-            zmath.loadArr3(.{ -0.5, -1.5, viewZ + 0.25 }),
+            zmath.loadArr3(.{ -1.5, -3.0, viewZ + 0.25 }),
             zmath.loadArr3(.{ 0.0, 0.0, 0.0 }),
             zmath.loadArr3(.{ 0.0, 0.0, 1.0 }),
         );
@@ -419,33 +356,6 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .stencil_read_mask = 0,
         .stencil_write_mask = 0,
     };
-
-    const texture_desc = zgpu.wgpu.TextureDescriptor{
-        .dimension = .tdim_2d,
-        .format = .rgba8_unorm,
-        .mip_level_count = 8,
-        .sample_count = 1,
-        .size = .{
-            .width = 256, // Use consistent texture dimensions
-            .height = 256, // Use consistent texture dimensions
-            .depth_or_array_layers = 1,
-        },
-        .usage = .{ .texture_binding = true, .copy_dst = true },
-        .view_format_count = 0,
-        .view_formats = null,
-    };
-
-    self.texture = self.gfx.createTexture(texture_desc);
-
-    self.texture_view = self.gfx.createTextureView(self.texture, .{
-        .aspect = .all,
-        .base_array_layer = 0,
-        .array_layer_count = 1,
-        .base_mip_level = 0,
-        .mip_level_count = 8,
-        .dimension = .tvdim_2d,
-        .format = .rgba8_unorm,
-    });
 
     // texture for the depth buffer
     self.depth_texture = self.gfx.createTexture(.{
@@ -670,4 +580,174 @@ fn makePixels(
     }
 
     return pixels;
+}
+
+fn bitWidth(m: u32) u32 {
+    if (m == 0) return 0;
+    var width: u32 = 0;
+    var value = m;
+    while (value > 0) : (width += 1) {
+        value >>= 1;
+    }
+    return width;
+}
+
+fn loadTexture(self: *App, path: []const u8) !void {
+    const image = try jpeg.load(self.allocator, path);
+    defer image.free(self.allocator);
+
+    const bounds = image.bounds();
+    const width: u32 = @intCast(bounds.dX());
+    const height: u32 = @intCast(bounds.dY());
+
+    const texture_pixels = try image.rgbaPixels(self.allocator);
+    defer self.allocator.free(texture_pixels);
+
+    const mip_level_count = bitWidth(@max(width, height));
+
+    const texture_desc = zgpu.wgpu.TextureDescriptor{
+        .dimension = .tdim_2d,
+        .format = .rgba8_unorm,
+        .mip_level_count = mip_level_count,
+        .sample_count = 1,
+        .size = .{
+            .width = width,
+            .height = height,
+            .depth_or_array_layers = 1,
+        },
+        .usage = .{ .texture_binding = true, .copy_dst = true },
+        .view_format_count = 0,
+        .view_formats = null,
+    };
+
+    self.texture = self.gfx.createTexture(texture_desc);
+
+    if (self.texture_view) |_| {
+        // do nothing if exists
+    } else {
+        self.texture_view = self.gfx.createTextureView(self.texture, .{
+            .aspect = .all,
+            .base_array_layer = 0,
+            .array_layer_count = 1,
+            .base_mip_level = 0,
+            .mip_level_count = texture_desc.mip_level_count,
+            .dimension = .tvdim_2d,
+            .format = texture_desc.format,
+        });
+    }
+
+    self.writeMipMaps(self.texture, texture_desc.size, texture_pixels);
+}
+
+fn writeMipMaps(
+    self: *App,
+    texture_handle: zgpu.TextureHandle,
+    texture_size: zgpu.wgpu.Extent3D,
+    texture_pixels: []u8,
+) void {
+    const texture = self.gfx.lookupResource(texture_handle) orelse unreachable;
+
+    // Arguments telling which part of the texture to upload
+    var destination = zgpu.wgpu.ImageCopyTexture{
+        .texture = texture,
+        .mip_level = 0,
+        .origin = .{ .x = 0, .y = 0, .z = 0 },
+        .aspect = .all,
+    };
+
+    var mip_level_size = texture_size;
+    var previous_level_pixels: ?[]u8 = null;
+
+    // Calculate number of mip levels based on the largest dimension
+    const max_dimension = @max(texture_size.width, texture_size.height);
+    const mip_level_count = bitWidth(max_dimension);
+
+    var level: u32 = 0;
+    while (level < mip_level_count) : (level += 1) {
+        // Calculate dimensions for this mip level
+        const width = texture_size.width >> @intCast(level);
+        const height = texture_size.height >> @intCast(level);
+
+        // Calculate bytes per row with proper alignment (256-byte alignment for WebGPU)
+        const bytes_per_row = (4 * width + 255) & ~@as(u32, 255);
+
+        // Allocate space for current mip level with proper row alignment
+        const row_pitch = bytes_per_row;
+        const buffer_size = row_pitch * height;
+        const pixels = self.allocator.alloc(u8, buffer_size) catch break;
+        defer self.allocator.free(pixels);
+
+        // Clear the buffer first
+        @memset(pixels, 0);
+
+        if (level == 0) {
+            // For the first level, copy the input texture data row by row to handle alignment
+            var y: usize = 0;
+            while (y < height) : (y += 1) {
+                const src_offset = y * width * 4;
+                const dst_offset = y * row_pitch;
+                const row_bytes = width * 4;
+                @memcpy(pixels[dst_offset..][0..row_bytes], texture_pixels[src_offset..][0..row_bytes]);
+            }
+        } else {
+            // Generate mip level data from previous level
+            const prev_width = texture_size.width >> @intCast(level - 1);
+            for (0..height) |j| {
+                for (0..width) |i| {
+                    const dst_offset = j * row_pitch + i * 4;
+
+                    // Calculate source pixels from previous level
+                    const src_x = i * 2;
+                    const src_y = j * 2;
+                    const prev_row_pitch = (4 * prev_width + 255) & ~@as(u32, 255);
+
+                    const p00_idx = src_y * prev_row_pitch + src_x * 4;
+                    const p01_idx = src_y * prev_row_pitch + (src_x + 1) * 4;
+                    const p10_idx = (src_y + 1) * prev_row_pitch + src_x * 4;
+                    const p11_idx = (src_y + 1) * prev_row_pitch + (src_x + 1) * 4;
+
+                    // Average each color component
+                    inline for (0..4) |component| {
+                        const sum = @as(u16, previous_level_pixels.?[p00_idx + component]) +
+                            @as(u16, previous_level_pixels.?[p01_idx + component]) +
+                            @as(u16, previous_level_pixels.?[p10_idx + component]) +
+                            @as(u16, previous_level_pixels.?[p11_idx + component]);
+                        pixels[dst_offset + component] = @truncate(sum / 4);
+                    }
+                }
+            }
+        }
+
+        // Upload the mip level to GPU
+        destination.mip_level = level;
+
+        // describes the layout of the data in the buffer
+        const data_layout = zgpu.wgpu.TextureDataLayout{
+            .offset = 0,
+            .bytes_per_row = bytes_per_row,
+            .rows_per_image = height,
+        };
+
+        mip_level_size.width = width;
+        mip_level_size.height = height;
+
+        self.gfx.queue.writeTexture(
+            destination,
+            data_layout,
+            mip_level_size,
+            u8,
+            pixels,
+        );
+
+        // Update for next iteration
+        if (previous_level_pixels) |prev_pixels| {
+            self.allocator.free(prev_pixels);
+        }
+        previous_level_pixels = self.allocator.dupe(u8, pixels) catch break;
+    }
+
+    // Clean up
+    if (previous_level_pixels) |prev_pixels| {
+        self.allocator.free(prev_pixels);
+    }
 }
