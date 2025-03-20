@@ -133,16 +133,6 @@ pub fn loadShaderModule(al: std.mem.Allocator, path: []const u8, device: zgpu.wg
     return zgpu.createWgslShaderModule(device, contents, null);
 }
 
-fn bitWidth(m: u32) u32 {
-    if (m == 0) return 0;
-    var width: u32 = 0;
-    var value = m;
-    while (value > 0) : (width += 1) {
-        value >>= 1;
-    }
-    return width;
-}
-
 pub fn loadTexture(
     allocator: std.mem.Allocator,
     gfx: *zgpu.GraphicsContext,
@@ -315,4 +305,14 @@ fn writeMipMaps(
     if (previous_level_pixels) |prev_pixels| {
         allocator.free(prev_pixels);
     }
+}
+
+fn bitWidth(m: u32) u32 {
+    if (m == 0) return 0;
+    var width: u32 = 0;
+    var value = m;
+    while (value > 0) : (width += 1) {
+        value >>= 1;
+    }
+    return width;
 }

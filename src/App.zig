@@ -47,6 +47,21 @@ pub fn init(allocator: std.mem.Allocator) !*App {
     return app;
 }
 
+pub fn deinit(self: *App) void {
+    self.vertex_buffer.release();
+    self.gfx.releaseResource(self.depth_texture);
+    self.gfx.destroyResource(self.depth_texture);
+    self.gfx.releaseResource(self.depth_view);
+    self.gfx.releaseResource(self.texture);
+    self.gfx.destroyResource(self.texture);
+
+    self.gfx.destroy(self.allocator);
+
+    zglfw.destroyWindow(self.window);
+    zglfw.terminate();
+    self.allocator.destroy(self);
+}
+
 fn createApp(allocator: std.mem.Allocator) !*App {
     const window = try createWindow();
     const app = try allocator.create(App);
@@ -92,26 +107,11 @@ fn createApp(allocator: std.mem.Allocator) !*App {
     return app;
 }
 
-pub fn deinit(self: *App) void {
-    self.vertex_buffer.release();
-    self.gfx.releaseResource(self.depth_texture);
-    self.gfx.destroyResource(self.depth_texture);
-    self.gfx.releaseResource(self.depth_view);
-    self.gfx.releaseResource(self.texture);
-    self.gfx.destroyResource(self.texture);
-
-    self.gfx.destroy(self.allocator);
-
-    zglfw.destroyWindow(self.window);
-    zglfw.terminate();
-    self.allocator.destroy(self);
-}
-
-pub fn isRunning(self: *App) bool {
+fn isRunning(self: *App) bool {
     return !self.window.shouldClose();
 }
 
-pub fn createWindow() !*zglfw.Window {
+fn createWindow() !*zglfw.Window {
     try zglfw.init();
     zglfw.windowHint(.client_api, .no_api);
     zglfw.windowHint(.resizable, false);
@@ -234,7 +234,7 @@ pub fn update(self: *App) !void {
     }
 }
 
-pub fn lerp(v0: f32, v1: f32, t: f32) f32 {
+fn lerp(v0: f32, v1: f32, t: f32) f32 {
     return v0 * (1.0 - t) + v1 * t;
 }
 
