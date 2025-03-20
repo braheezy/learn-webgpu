@@ -13,5 +13,7 @@ pub fn main() !void {
     const app = try App.init(allocator);
     defer app.deinit();
 
-    try app.run();
+    while (app.isRunning()) {
+        try app.update();
+    }
 }

@@ -6,16 +6,11 @@ const obj = @import("obj");
 const jpeg = @import("zjpeg");
 
 const ResourceManager = @import("ResourceManager.zig");
+const VertexAttr = ResourceManager.VertexAttr;
 
-const obj_file = @embedFile("resources/fourareen/fourareen.obj");
-const vertex_text_file = @embedFile("resources/pyramid.txt");
-
-const VertexAttr = struct {
-    position: [3]f32,
-    normal: [3]f32,
-    color: [3]f32,
-    uv: [2]f32,
-};
+const obj_file = "src/resources/fourareen/fourareen.obj";
+const vertex_text_file = "src/resources/pyramid.txt";
+const texture_file = "src/resources/fourareen/fourareen2K_albedo.jpg";
 
 const MyUniforms = struct {
     projection: zmath.Mat = undefined,
@@ -32,22 +27,28 @@ allocator: std.mem.Allocator,
 window: *zglfw.Window,
 gfx: *zgpu.GraphicsContext = undefined,
 pipeline: zgpu.RenderPipelineHandle = undefined,
-point_buffer: zgpu.wgpu.Buffer = undefined,
-index_buffer: zgpu.wgpu.Buffer = undefined,
-index_count: u32 = 0,
+vertex_buffer: zgpu.wgpu.Buffer = undefined,
+vertex_count: u32 = 0,
 bind_group: zgpu.BindGroupHandle = undefined,
 depth_texture: zgpu.TextureHandle = undefined,
 depth_view: zgpu.TextureViewHandle = undefined,
 texture: zgpu.TextureHandle = undefined,
-texture_view: ?zgpu.TextureViewHandle,
+texture_view: ?zgpu.TextureViewHandle = null,
 my_uniforms: MyUniforms = .{},
 
 pub fn init(allocator: std.mem.Allocator) !*App {
-    try zglfw.init();
-    zglfw.windowHint(.client_api, .no_api);
-    zglfw.windowHint(.resizable, false);
+    const app = try createApp(allocator);
+    try app.createDepthBuffer();
+    try app.createTexture(texture_file);
+    try app.createGeometry();
+    try app.createPipeline(allocator);
+    try app.createUniforms();
 
-    const window = try zglfw.createWindow(640, 480, "Learn WebGPU", null);
+    return app;
+}
+
+fn createApp(allocator: std.mem.Allocator) !*App {
+    const window = try createWindow();
     const app = try allocator.create(App);
     app.* = App{
         .allocator = allocator,
@@ -88,17 +89,11 @@ pub fn init(allocator: std.mem.Allocator) !*App {
         },
     });
 
-    try app.loadTexture("src/resources/fourareen/fourareen2K_albedo.jpg");
-
-    try app.createPipeline(allocator);
-
-    try app.initializeBuffers();
     return app;
 }
 
 pub fn deinit(self: *App) void {
-    self.point_buffer.release();
-    self.index_buffer.release();
+    self.vertex_buffer.release();
     self.gfx.releaseResource(self.depth_texture);
     self.gfx.destroyResource(self.depth_texture);
     self.gfx.releaseResource(self.depth_view);
@@ -112,59 +107,39 @@ pub fn deinit(self: *App) void {
     self.allocator.destroy(self);
 }
 
-fn initializeBuffers(self: *App) !void {
-    // Load the OBJ model instead of using the text file
-    var obj_model = try obj.parseObj(self.allocator, obj_file);
-    defer obj_model.deinit(self.allocator);
+pub fn isRunning(self: *App) bool {
+    return !self.window.shouldClose();
+}
 
-    // Create vertex and index data arrays to hold the converted data
-    var point_data = std.ArrayList(f32).init(self.allocator);
-    var index_data = std.ArrayList(u32).init(self.allocator);
-    defer point_data.deinit();
-    defer index_data.deinit();
+pub fn createWindow() !*zglfw.Window {
+    try zglfw.init();
+    zglfw.windowHint(.client_api, .no_api);
+    zglfw.windowHint(.resizable, false);
 
-    // Process the OBJ data and fill the point_data and index_data arrays
-    try processObjData(obj_model, &point_data, &index_data);
-    self.index_count = @intCast(index_data.items.len);
+    return zglfw.createWindow(640, 480, "Learn WebGPU", null);
+}
 
-    var buffer_desc = zgpu.wgpu.BufferDescriptor{
+fn createGeometry(self: *App) !void {
+    const vertex_data = try ResourceManager.loadGeometryFromObj(
+        self.allocator,
+        obj_file,
+    );
+    defer vertex_data.deinit();
+    self.vertex_count = @intCast(vertex_data.items.len);
+
+    const buffer_desc = zgpu.wgpu.BufferDescriptor{
         .label = "Vertex buffer",
         .usage = .{ .copy_dst = true, .vertex = true },
-        .size = point_data.items.len * @sizeOf(f32),
+        .size = vertex_data.items.len * @sizeOf(VertexAttr),
         .mapped_at_creation = .false,
     };
-    buffer_desc.size = (buffer_desc.size + 3) & ~@as(u64, 3);
-    // create point buffer
-    self.point_buffer = self.gfx.device.createBuffer(buffer_desc);
+    self.vertex_buffer = self.gfx.device.createBuffer(buffer_desc);
     // upload to buffer
-    self.gfx.queue.writeBuffer(self.point_buffer, 0, f32, point_data.items);
-
-    // Now the index buffer, reusing the buffer descriptor
-    buffer_desc.label = "Index Buffer";
-    buffer_desc.size = index_data.items.len * @sizeOf(u32);
-    // round size to the nearest multiple of 4
-    buffer_desc.size = (buffer_desc.size + 3) & ~@as(u64, 3);
-    buffer_desc.usage = .{ .copy_dst = true, .index = true };
-    self.index_buffer = self.gfx.device.createBuffer(buffer_desc);
-
-    if (index_data.items.len != buffer_desc.size) {
-        // Pad index_data to the nearest multiple of 4
-        const padding = buffer_desc.size - (index_data.items.len * @sizeOf(u32));
-        const padding_data = try self.allocator.alloc(u32, padding / @sizeOf(u32));
-        @memset(padding_data, 0);
-        defer self.allocator.free(padding_data);
-        try index_data.appendSlice(padding_data);
-    }
-
-    // First submit the write operation
-    self.gfx.queue.writeBuffer(self.index_buffer, 0, u32, index_data.items);
+    std.debug.print("vertex_buffer size: {}\n", .{vertex_data.items.len});
+    self.gfx.queue.writeBuffer(self.vertex_buffer, 0, VertexAttr, vertex_data.items);
 }
 
-fn toRadians(degrees: f32) f32 {
-    return degrees * std.math.pi / 180.0;
-}
-
-pub fn run(self: *App) !void {
+fn createUniforms(self: *App) !void {
     self.my_uniforms.projection = zmath.perspectiveFovLh(
         toRadians(45.0),
         640.0 / 480.0,
@@ -173,8 +148,16 @@ pub fn run(self: *App) !void {
     );
 
     self.my_uniforms.model = zmath.identity();
+}
 
+fn toRadians(degrees: f32) f32 {
+    return degrees * std.math.pi / 180.0;
+}
+
+pub fn update(self: *App) !void {
     const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
+    const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
+    const bind_group = self.gfx.lookupResource(self.bind_group) orelse unreachable;
 
     const depth_attachment = zgpu.wgpu.RenderPassDepthStencilAttachment{
         .view = depth_view,
@@ -187,9 +170,6 @@ pub fn run(self: *App) !void {
         .stencil_store_op = .undef,
         .stencil_read_only = .true,
     };
-
-    const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
-    const bind_group = self.gfx.lookupResource(self.bind_group) orelse unreachable;
 
     // Main render loop
     while (!self.window.shouldClose()) {
@@ -235,12 +215,11 @@ pub fn run(self: *App) !void {
 
         pass.setPipeline(pipeline);
 
-        pass.setVertexBuffer(0, self.point_buffer, 0, self.point_buffer.getSize());
-        pass.setIndexBuffer(self.index_buffer, .uint32, 0, self.index_buffer.getSize());
+        pass.setVertexBuffer(0, self.vertex_buffer, 0, self.vertex_buffer.getSize());
 
         pass.setBindGroup(0, bind_group, null);
 
-        pass.drawIndexed(self.index_count, 1, 0, 0, 0);
+        pass.draw(self.vertex_count, 1, 0, 0);
 
         pass.end();
         pass.release();
@@ -339,7 +318,7 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
     };
 
     const vertex_buffer_layout = zgpu.wgpu.VertexBufferLayout{
-        .array_stride = 11 * @sizeOf(f32),
+        .array_stride = @sizeOf(VertexAttr),
         .attribute_count = 4,
         .attributes = &[_]zgpu.wgpu.VertexAttribute{
             position_attribute,
@@ -356,32 +335,6 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .stencil_read_mask = 0,
         .stencil_write_mask = 0,
     };
-
-    // texture for the depth buffer
-    self.depth_texture = self.gfx.createTexture(.{
-        .dimension = .tdim_2d,
-        .format = .depth24_plus,
-        .mip_level_count = 1,
-        .sample_count = 1,
-        .size = .{
-            .width = self.gfx.swapchain_descriptor.width,
-            .height = self.gfx.swapchain_descriptor.height,
-            .depth_or_array_layers = 1,
-        },
-        .usage = .{ .render_attachment = true },
-        .view_format_count = 1,
-        .view_formats = &[_]zgpu.wgpu.TextureFormat{.depth24_plus},
-    });
-
-    self.depth_view = self.gfx.createTextureView(self.depth_texture, .{
-        .aspect = .depth_only,
-        .base_array_layer = 0,
-        .array_layer_count = 1,
-        .base_mip_level = 0,
-        .mip_level_count = 1,
-        .dimension = .tvdim_2d,
-        .format = .depth24_plus,
-    });
 
     const sampler = self.gfx.createSampler(.{
         .address_mode_u = .repeat,
@@ -437,317 +390,38 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
     });
 }
 
-// Helper function to process OBJ data and convert it to our expected format
-fn processObjData(model: obj.ObjData, point_data: *std.ArrayList(f32), index_data: *std.ArrayList(u32)) !void {
-    // Clear existing data
-    point_data.clearRetainingCapacity();
-    index_data.clearRetainingCapacity();
-
-    // Process each mesh in the OBJ model
-    for (model.meshes) |mesh| {
-        var face_start: usize = 0;
-
-        // Process each face in the mesh (using num_vertices to determine faces)
-        for (mesh.num_vertices) |num_verts_in_face| {
-            // Handle triangles and quads (or faces with more vertices)
-            for (1..num_verts_in_face - 1) |i| {
-                // For each triangle in the face, process 3 vertices
-                // First vertex is always at face_start
-                // The other two form the triangle (like a triangle fan)
-                const indices_to_process = [_]usize{ face_start, face_start + i, face_start + i + 1 };
-
-                for (indices_to_process) |idx| {
-                    const mesh_index = mesh.indices[idx];
-
-                    // Get position data if available
-                    var px: f32 = 0.0;
-                    var py: f32 = 0.0;
-                    var pz: f32 = 0.0;
-
-                    if (mesh_index.vertex) |vertex_idx| {
-                        if (vertex_idx * 3 + 2 < model.vertices.len) {
-                            // OBJ uses Y-up convention, but our code uses Z-up
-                            px = model.vertices[vertex_idx * 3];
-                            py = -model.vertices[vertex_idx * 3 + 2];
-                            pz = model.vertices[vertex_idx * 3 + 1];
-                        }
-                    }
-
-                    // Get normal data if available
-                    var nx: f32 = 0.0;
-                    var ny: f32 = 0.0;
-                    var nz: f32 = 0.0;
-
-                    if (mesh_index.normal) |normal_idx| {
-                        if (normal_idx * 3 + 2 < model.normals.len) {
-                            nx = model.normals[normal_idx * 3];
-                            ny = -model.normals[normal_idx * 3 + 2];
-                            nz = model.normals[normal_idx * 3 + 1];
-                        }
-                    }
-
-                    // Use white as default color
-                    const r: f32 = 1.0;
-                    const g: f32 = 1.0;
-                    const b: f32 = 1.0;
-
-                    // Get texture coordinates if available - THIS IS CRITICAL
-                    var u: f32 = 0.0;
-                    var v: f32 = 0.0;
-
-                    if (mesh_index.tex_coord) |uv_idx| {
-                        if (uv_idx * 2 + 1 < model.tex_coords.len) {
-                            // OBJ format stores UV with bottom-left origin (0,0)
-                            // Make sure U is clamped to [0,1] range
-                            u = @max(0.0, @min(1.0, model.tex_coords[uv_idx * 2]));
-                            // Flip V coordinate as OBJ format uses bottom-left origin
-                            // and we want top-left origin for WebGPU
-                            v = 1.0 - @max(0.0, @min(1.0, model.tex_coords[uv_idx * 2 + 1]));
-
-                            // Debug print - uncomment if needed
-                            // std.debug.print("UV: ({d}, {d})\n", .{ u, v });
-                        }
-                    }
-
-                    // Add position, normal, color and UV to the point data
-                    try point_data.appendSlice(&[_]f32{ px, py, pz, nx, ny, nz, r, g, b, u, v });
-
-                    // Add index
-                    try index_data.append(@as(u32, @intCast(point_data.items.len / 11 - 1)));
-                }
-            }
-
-            // Move to the next face
-            face_start += num_verts_in_face;
-        }
-    }
-}
-
-/// Creates a slice of pixels for texture data
-/// Caller is responsible for freeing the returned slice with allocator.free()
-fn makePixels(
-    allocator: std.mem.Allocator,
-    base_width: u32,
-    base_height: u32,
-    level: u32,
-    previous_pixels: ?[]u8,
-) ![]u8 {
-    // Calculate the dimensions for this mip level
-    const width = base_width >> @intCast(level);
-    const height = base_height >> @intCast(level);
-
-    // Allocate memory for the pixel data (4 bytes per pixel: R, G, B, A)
-    const pixel_count = width * height;
-    const pixels = try allocator.alloc(u8, 4 * pixel_count);
-
-    // Fill the pixel data
-    for (0..width) |i_unsigned| {
-        for (0..height) |j_unsigned| {
-            // Convert to signed to avoid underflow
-            const i: i32 = @intCast(i_unsigned);
-            const j: i32 = @intCast(j_unsigned);
-
-            // Calculate the pixel index in the buffer
-            const pixel_index = 4 * (j_unsigned * width + i_unsigned);
-            if (level == 0) {
-                // Set RGBA values using signed arithmetic
-                pixels[pixel_index + 0] = if (@mod(@divFloor(i, 16), 2) == @mod(@divFloor(j, 16), 2)) 255 else 0;
-                pixels[pixel_index + 1] = if (@mod(@divFloor(i - j, 16), 2) == 0) 255 else 0;
-                pixels[pixel_index + 2] = if (@mod(@divFloor(i + j, 16), 2) == 0) 255 else 0;
-            } else {
-                // For each pixel in the current level, we need to average a 2x2 block from the previous level
-                const prev_width = base_width >> @intCast(level - 1); // Width of the previous mip level
-                const prev_x = i_unsigned * 2; // Convert current coordinates to previous level coordinates
-                const prev_y = j_unsigned * 2;
-
-                // Get the indices for each of the 4 pixels we need to average
-                const p00_idx = 4 * (prev_y * prev_width + prev_x);
-                const p01_idx = 4 * (prev_y * prev_width + prev_x + 1);
-                const p10_idx = 4 * ((prev_y + 1) * prev_width + prev_x);
-                const p11_idx = 4 * ((prev_y + 1) * prev_width + prev_x + 1);
-
-                // Average each RGB component separately
-                for (0..3) |component| {
-                    const sum = @as(u16, previous_pixels.?[p00_idx + component]) +
-                        @as(u16, previous_pixels.?[p01_idx + component]) +
-                        @as(u16, previous_pixels.?[p10_idx + component]) +
-                        @as(u16, previous_pixels.?[p11_idx + component]);
-                    pixels[pixel_index + component] = @truncate(sum / 4);
-                }
-            }
-            pixels[pixel_index + 3] = 255; // A - fully opaque
-        }
-    }
-
-    return pixels;
-}
-
-fn bitWidth(m: u32) u32 {
-    if (m == 0) return 0;
-    var width: u32 = 0;
-    var value = m;
-    while (value > 0) : (width += 1) {
-        value >>= 1;
-    }
-    return width;
-}
-
-fn loadTexture(self: *App, path: []const u8) !void {
-    const image = try jpeg.load(self.allocator, path);
-    defer image.free(self.allocator);
-
-    const bounds = image.bounds();
-    const width: u32 = @intCast(bounds.dX());
-    const height: u32 = @intCast(bounds.dY());
-
-    const texture_pixels = try image.rgbaPixels(self.allocator);
-    defer self.allocator.free(texture_pixels);
-
-    const mip_level_count = bitWidth(@max(width, height));
-
-    const texture_desc = zgpu.wgpu.TextureDescriptor{
+fn createDepthBuffer(self: *App) !void {
+    self.depth_texture = self.gfx.createTexture(.{
         .dimension = .tdim_2d,
-        .format = .rgba8_unorm,
-        .mip_level_count = mip_level_count,
+        .format = .depth24_plus,
+        .mip_level_count = 1,
         .sample_count = 1,
         .size = .{
-            .width = width,
-            .height = height,
+            .width = self.gfx.swapchain_descriptor.width,
+            .height = self.gfx.swapchain_descriptor.height,
             .depth_or_array_layers = 1,
         },
-        .usage = .{ .texture_binding = true, .copy_dst = true },
-        .view_format_count = 0,
-        .view_formats = null,
-    };
+        .usage = .{ .render_attachment = true },
+        .view_format_count = 1,
+        .view_formats = &[_]zgpu.wgpu.TextureFormat{.depth24_plus},
+    });
 
-    self.texture = self.gfx.createTexture(texture_desc);
-
-    if (self.texture_view) |_| {
-        // do nothing if exists
-    } else {
-        self.texture_view = self.gfx.createTextureView(self.texture, .{
-            .aspect = .all,
-            .base_array_layer = 0,
-            .array_layer_count = 1,
-            .base_mip_level = 0,
-            .mip_level_count = texture_desc.mip_level_count,
-            .dimension = .tvdim_2d,
-            .format = texture_desc.format,
-        });
-    }
-
-    self.writeMipMaps(self.texture, texture_desc.size, texture_pixels);
+    self.depth_view = self.gfx.createTextureView(self.depth_texture, .{
+        .aspect = .depth_only,
+        .base_array_layer = 0,
+        .array_layer_count = 1,
+        .base_mip_level = 0,
+        .mip_level_count = 1,
+        .dimension = .tvdim_2d,
+        .format = .depth24_plus,
+    });
 }
 
-fn writeMipMaps(
-    self: *App,
-    texture_handle: zgpu.TextureHandle,
-    texture_size: zgpu.wgpu.Extent3D,
-    texture_pixels: []u8,
-) void {
-    const texture = self.gfx.lookupResource(texture_handle) orelse unreachable;
-
-    // Arguments telling which part of the texture to upload
-    var destination = zgpu.wgpu.ImageCopyTexture{
-        .texture = texture,
-        .mip_level = 0,
-        .origin = .{ .x = 0, .y = 0, .z = 0 },
-        .aspect = .all,
-    };
-
-    var mip_level_size = texture_size;
-    var previous_level_pixels: ?[]u8 = null;
-
-    // Calculate number of mip levels based on the largest dimension
-    const max_dimension = @max(texture_size.width, texture_size.height);
-    const mip_level_count = bitWidth(max_dimension);
-
-    var level: u32 = 0;
-    while (level < mip_level_count) : (level += 1) {
-        // Calculate dimensions for this mip level
-        const width = texture_size.width >> @intCast(level);
-        const height = texture_size.height >> @intCast(level);
-
-        // Calculate bytes per row with proper alignment (256-byte alignment for WebGPU)
-        const bytes_per_row = (4 * width + 255) & ~@as(u32, 255);
-
-        // Allocate space for current mip level with proper row alignment
-        const row_pitch = bytes_per_row;
-        const buffer_size = row_pitch * height;
-        const pixels = self.allocator.alloc(u8, buffer_size) catch break;
-        defer self.allocator.free(pixels);
-
-        // Clear the buffer first
-        @memset(pixels, 0);
-
-        if (level == 0) {
-            // For the first level, copy the input texture data row by row to handle alignment
-            var y: usize = 0;
-            while (y < height) : (y += 1) {
-                const src_offset = y * width * 4;
-                const dst_offset = y * row_pitch;
-                const row_bytes = width * 4;
-                @memcpy(pixels[dst_offset..][0..row_bytes], texture_pixels[src_offset..][0..row_bytes]);
-            }
-        } else {
-            // Generate mip level data from previous level
-            const prev_width = texture_size.width >> @intCast(level - 1);
-            for (0..height) |j| {
-                for (0..width) |i| {
-                    const dst_offset = j * row_pitch + i * 4;
-
-                    // Calculate source pixels from previous level
-                    const src_x = i * 2;
-                    const src_y = j * 2;
-                    const prev_row_pitch = (4 * prev_width + 255) & ~@as(u32, 255);
-
-                    const p00_idx = src_y * prev_row_pitch + src_x * 4;
-                    const p01_idx = src_y * prev_row_pitch + (src_x + 1) * 4;
-                    const p10_idx = (src_y + 1) * prev_row_pitch + src_x * 4;
-                    const p11_idx = (src_y + 1) * prev_row_pitch + (src_x + 1) * 4;
-
-                    // Average each color component
-                    inline for (0..4) |component| {
-                        const sum = @as(u16, previous_level_pixels.?[p00_idx + component]) +
-                            @as(u16, previous_level_pixels.?[p01_idx + component]) +
-                            @as(u16, previous_level_pixels.?[p10_idx + component]) +
-                            @as(u16, previous_level_pixels.?[p11_idx + component]);
-                        pixels[dst_offset + component] = @truncate(sum / 4);
-                    }
-                }
-            }
-        }
-
-        // Upload the mip level to GPU
-        destination.mip_level = level;
-
-        // describes the layout of the data in the buffer
-        const data_layout = zgpu.wgpu.TextureDataLayout{
-            .offset = 0,
-            .bytes_per_row = bytes_per_row,
-            .rows_per_image = height,
-        };
-
-        mip_level_size.width = width;
-        mip_level_size.height = height;
-
-        self.gfx.queue.writeTexture(
-            destination,
-            data_layout,
-            mip_level_size,
-            u8,
-            pixels,
-        );
-
-        // Update for next iteration
-        if (previous_level_pixels) |prev_pixels| {
-            self.allocator.free(prev_pixels);
-        }
-        previous_level_pixels = self.allocator.dupe(u8, pixels) catch break;
-    }
-
-    // Clean up
-    if (previous_level_pixels) |prev_pixels| {
-        self.allocator.free(prev_pixels);
-    }
+fn createTexture(self: *App, path: []const u8) !void {
+    self.texture = try ResourceManager.loadTexture(
+        self.allocator,
+        self.gfx,
+        path,
+        &self.texture_view,
+    );
 }
