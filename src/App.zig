@@ -38,7 +38,7 @@ my_uniforms: MyUniforms = .{},
 
 pub fn init(allocator: std.mem.Allocator) !*App {
     const app = try createApp(allocator);
-    try app.createDepthBuffer();
+    app.createDepthBuffer();
     try app.createTexture(texture_file);
     try app.createGeometry();
     try app.createPipeline(allocator);
@@ -49,9 +49,7 @@ pub fn init(allocator: std.mem.Allocator) !*App {
 
 pub fn deinit(self: *App) void {
     self.vertex_buffer.release();
-    self.gfx.releaseResource(self.depth_texture);
-    self.gfx.destroyResource(self.depth_texture);
-    self.gfx.releaseResource(self.depth_view);
+    self.cleanDepthBuffer();
     self.gfx.releaseResource(self.texture);
     self.gfx.destroyResource(self.texture);
 
@@ -62,8 +60,15 @@ pub fn deinit(self: *App) void {
     self.allocator.destroy(self);
 }
 
+fn cleanDepthBuffer(self: *App) void {
+    self.gfx.releaseResource(self.depth_texture);
+    self.gfx.destroyResource(self.depth_texture);
+    self.gfx.releaseResource(self.depth_view);
+}
+
 fn createApp(allocator: std.mem.Allocator) !*App {
     const window = try createWindow();
+
     const app = try allocator.create(App);
     app.* = App{
         .allocator = allocator,
@@ -107,16 +112,18 @@ fn createApp(allocator: std.mem.Allocator) !*App {
     return app;
 }
 
-fn isRunning(self: *App) bool {
-    return !self.window.shouldClose();
+pub fn isRunning(self: *App) bool {
+    return !self.window.shouldClose() and self.window.getKey(.escape) != .press;
 }
 
 fn createWindow() !*zglfw.Window {
     try zglfw.init();
     zglfw.windowHint(.client_api, .no_api);
-    zglfw.windowHint(.resizable, false);
+    zglfw.windowHint(.resizable, true);
 
-    return zglfw.createWindow(640, 480, "Learn WebGPU", null);
+    const window = try zglfw.createWindow(640, 480, "Learn WebGPU", null);
+
+    return window;
 }
 
 fn createGeometry(self: *App) !void {
@@ -139,13 +146,17 @@ fn createGeometry(self: *App) !void {
     self.gfx.queue.writeBuffer(self.vertex_buffer, 0, VertexAttr, vertex_data.items);
 }
 
-fn createUniforms(self: *App) !void {
+fn updatePerspective(self: *App) void {
     self.my_uniforms.projection = zmath.perspectiveFovLh(
         toRadians(45.0),
-        640.0 / 480.0,
+        @as(f32, @floatFromInt(self.gfx.swapchain_descriptor.width)) / @as(f32, @floatFromInt(self.gfx.swapchain_descriptor.height)),
         0.01,
         100,
     );
+}
+
+fn createUniforms(self: *App) !void {
+    self.updatePerspective();
 
     self.my_uniforms.model = zmath.identity();
 }
@@ -171,66 +182,67 @@ pub fn update(self: *App) !void {
         .stencil_read_only = .true,
     };
 
-    // Main render loop
-    while (!self.window.shouldClose()) {
-        self.gfx.device.tick();
-        zglfw.pollEvents();
+    self.gfx.device.tick();
+    zglfw.pollEvents();
 
-        const time = @as(f32, @floatCast(self.gfx.stats.time));
-        self.my_uniforms.time = time;
+    const time = @as(f32, @floatCast(self.gfx.stats.time));
+    self.my_uniforms.time = time;
 
-        const v0: f32 = 0.0;
-        const v1: f32 = 0.25;
-        const viewZ = lerp(v0, v1, @cos(2.0 * std.math.pi * time / 4.0) * 0.5 + 0.5);
-        self.my_uniforms.view = zmath.lookAtLh(
-            zmath.loadArr3(.{ -1.5, -3.0, viewZ + 0.25 }),
-            zmath.loadArr3(.{ 0.0, 0.0, 0.0 }),
-            zmath.loadArr3(.{ 0.0, 0.0, 1.0 }),
-        );
+    const v0: f32 = 0.0;
+    const v1: f32 = 0.25;
+    const viewZ = lerp(v0, v1, @cos(2.0 * std.math.pi * time / 4.0) * 0.5 + 0.5);
+    self.my_uniforms.view = zmath.lookAtLh(
+        zmath.loadArr3(.{ -1.5, -3.0, viewZ + 0.25 }),
+        zmath.loadArr3(.{ 0.0, 0.0, 0.0 }),
+        zmath.loadArr3(.{ 0.0, 0.0, 1.0 }),
+    );
 
-        // Allocate and update the entire uniform struct
-        const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
-        uni_mem.slice[0] = self.my_uniforms;
+    // Allocate and update the entire uniform struct
+    const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
+    uni_mem.slice[0] = self.my_uniforms;
 
-        const view = self.gfx.swapchain.getCurrentTextureView();
-        defer view.release();
+    const view = self.gfx.swapchain.getCurrentTextureView();
+    defer view.release();
 
-        const color_attachment = [_]zgpu.wgpu.RenderPassColorAttachment{.{
-            .view = view,
-            .load_op = .clear,
-            .store_op = .store,
-            .clear_value = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 1.0 },
-        }};
+    const color_attachment = [_]zgpu.wgpu.RenderPassColorAttachment{.{
+        .view = view,
+        .load_op = .clear,
+        .store_op = .store,
+        .clear_value = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 1.0 },
+    }};
 
-        const render_pass_info = zgpu.wgpu.RenderPassDescriptor{
-            .color_attachments = &color_attachment,
-            .color_attachment_count = 1,
-            .depth_stencil_attachment = &depth_attachment,
-        };
+    const render_pass_info = zgpu.wgpu.RenderPassDescriptor{
+        .color_attachments = &color_attachment,
+        .color_attachment_count = 1,
+        .depth_stencil_attachment = &depth_attachment,
+    };
 
-        const encoder = self.gfx.device.createCommandEncoder(null);
-        defer encoder.release();
+    const encoder = self.gfx.device.createCommandEncoder(null);
+    defer encoder.release();
 
-        const pass = encoder.beginRenderPass(render_pass_info);
+    const pass = encoder.beginRenderPass(render_pass_info);
 
-        pass.setPipeline(pipeline);
+    pass.setPipeline(pipeline);
 
-        pass.setVertexBuffer(0, self.vertex_buffer, 0, self.vertex_buffer.getSize());
+    pass.setVertexBuffer(0, self.vertex_buffer, 0, self.vertex_buffer.getSize());
 
-        pass.setBindGroup(0, bind_group, null);
+    pass.setBindGroup(0, bind_group, null);
 
-        pass.draw(self.vertex_count, 1, 0, 0);
+    pass.draw(self.vertex_count, 1, 0, 0);
 
-        pass.end();
-        pass.release();
+    pass.end();
+    pass.release();
 
-        const command_buffer = encoder.finish(null);
-        defer command_buffer.release();
+    const command_buffer = encoder.finish(null);
+    defer command_buffer.release();
 
-        self.gfx.submit(&.{command_buffer});
-        _ = self.gfx.present();
+    self.gfx.submit(&.{command_buffer});
 
-        self.window.swapBuffers();
+    if (self.gfx.present() == .swap_chain_resized) {
+        self.cleanDepthBuffer();
+        self.createDepthBuffer();
+
+        self.updatePerspective();
     }
 }
 
@@ -390,7 +402,7 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
     });
 }
 
-fn createDepthBuffer(self: *App) !void {
+fn createDepthBuffer(self: *App) void {
     self.depth_texture = self.gfx.createTexture(.{
         .dimension = .tdim_2d,
         .format = .depth24_plus,
