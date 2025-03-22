@@ -21,6 +21,27 @@ const MyUniforms = struct {
     padding: [3]f32 = [_]f32{0} ** 3,
 };
 
+const Camera = struct {
+    angles: [2]f32 = .{ 0.0, 0.0 },
+    zoom: f32 = -1.2,
+};
+
+const DragState = struct {
+    // Whether a drag action is ongoing (i.e., we are between mouse press and mouse release)
+    active: bool = false,
+    // The position of the mouse at the beginning of the drag action
+    start_position: [2]f64 = .{ 0.0, 0.0 },
+    // The camera state at the beginning of the drag action
+    start_camera: Camera = .{},
+    // Inertia
+    velocity: [2]f64 = .{ 0.0, 0.0 },
+    previous_delta: [2]f64 = .{ 0.0, 0.0 },
+
+    const sensitivity: f32 = 0.01;
+    const scroll_sensitivity: f32 = 0.1;
+    const inertia: f32 = 0.9;
+};
+
 const App = @This();
 
 allocator: std.mem.Allocator,
@@ -35,6 +56,8 @@ depth_view: zgpu.TextureViewHandle = undefined,
 texture: zgpu.TextureHandle = undefined,
 texture_view: ?zgpu.TextureViewHandle = null,
 my_uniforms: MyUniforms = .{},
+camera: Camera = .{},
+drag_state: DragState = .{},
 
 pub fn init(allocator: std.mem.Allocator) !*App {
     const app = try createApp(allocator);
@@ -109,7 +132,80 @@ fn createApp(allocator: std.mem.Allocator) !*App {
         },
     });
 
+    app.createCallbacks();
+
     return app;
+}
+
+fn createCallbacks(self: *App) void {
+    // Get pointer to App to pass to callbacks
+    zglfw.setWindowUserPointer(self.window, @ptrCast(self));
+
+    _ = zglfw.setCursorPosCallback(self.window, struct {
+        fn cb(window: *zglfw.Window, xpos: f64, ypos: f64) callconv(.C) void {
+            const app = window.getUserPointer(App) orelse unreachable;
+            if (app.drag_state.active) {
+                const current_mouse_pos: [2]f64 = .{ xpos, ypos };
+                const delta: [2]f64 = .{
+                    (current_mouse_pos[0] - app.drag_state.start_position[0]) * DragState.sensitivity,
+                    (current_mouse_pos[1] - app.drag_state.start_position[1]) * DragState.sensitivity,
+                };
+                app.camera.angles[0] = app.drag_state.start_camera.angles[0] + @as(f32, @floatCast(delta[0]));
+                app.camera.angles[1] = app.drag_state.start_camera.angles[1] + @as(f32, @floatCast(delta[1]));
+                // Clamp to avoid going too far when orbitting up/down
+                app.camera.angles[1] = zmath.clamp(
+                    app.camera.angles[1],
+                    -std.math.pi / 2.0 + 1e-5,
+                    std.math.pi / 2.0 - 1e-5,
+                );
+                app.updateView();
+
+                app.drag_state.velocity = .{
+                    delta[0] - app.drag_state.previous_delta[0],
+                    delta[1] - app.drag_state.previous_delta[1],
+                };
+                app.drag_state.previous_delta = delta;
+            }
+        }
+    }.cb);
+
+    _ = zglfw.setMouseButtonCallback(self.window, struct {
+        fn cb(
+            window: *zglfw.Window,
+            button: zglfw.MouseButton,
+            action: zglfw.Action,
+            mods: zglfw.Mods,
+        ) callconv(.C) void {
+            const app = window.getUserPointer(App) orelse unreachable;
+            _ = mods;
+
+            if (button == .left) {
+                switch (action) {
+                    .press => {
+                        app.drag_state.active = true;
+                        const cursor_pos = app.window.getCursorPos();
+                        app.drag_state.start_position = .{ cursor_pos[0], cursor_pos[1] };
+                        app.drag_state.start_camera = app.camera;
+                    },
+                    .release => {
+                        app.drag_state.active = false;
+                    },
+                    else => {},
+                }
+            }
+        }
+    }.cb);
+
+    _ = zglfw.setScrollCallback(self.window, struct {
+        fn cb(window: *zglfw.Window, x_offset: f64, y_offset: f64) callconv(.C) void {
+            const app = window.getUserPointer(App) orelse unreachable;
+            _ = x_offset;
+
+            app.camera.zoom += @as(f32, @floatCast(y_offset)) * DragState.scroll_sensitivity;
+            app.camera.zoom = zmath.clamp(app.camera.zoom, -2.0, 2.0);
+            app.updateView();
+        }
+    }.cb);
 }
 
 pub fn isRunning(self: *App) bool {
@@ -155,10 +251,35 @@ fn updatePerspective(self: *App) void {
     );
 }
 
+fn updateView(self: *App) void {
+    const cx = @cos(self.camera.angles[0]);
+    const sx = @sin(self.camera.angles[0]);
+    const cy = @cos(self.camera.angles[1]);
+    const sy = @sin(self.camera.angles[1]);
+
+    const zoom_factor = std.math.exp(-self.camera.zoom);
+    const position = zmath.Vec{
+        cx * cy * zoom_factor,
+        sx * cy * zoom_factor,
+        sy * zoom_factor,
+        1.0,
+    };
+
+    self.my_uniforms.view = zmath.lookAtLh(
+        position,
+        zmath.Vec{ 0.0, 0.0, 0.0, 1.0 },
+        zmath.Vec{ 0.0, 0.0, 1.0, 1.0 },
+    );
+
+    const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
+    uni_mem.slice[0].view = self.my_uniforms.view;
+}
+
 fn createUniforms(self: *App) !void {
     self.updatePerspective();
 
     self.my_uniforms.model = zmath.identity();
+    self.updateView();
 }
 
 fn toRadians(degrees: f32) f32 {
@@ -182,20 +303,13 @@ pub fn update(self: *App) !void {
         .stencil_read_only = .true,
     };
 
+    self.updateDragInertia();
+
     self.gfx.device.tick();
     zglfw.pollEvents();
 
     const time = @as(f32, @floatCast(self.gfx.stats.time));
     self.my_uniforms.time = time;
-
-    const v0: f32 = 0.0;
-    const v1: f32 = 0.25;
-    const viewZ = lerp(v0, v1, @cos(2.0 * std.math.pi * time / 4.0) * 0.5 + 0.5);
-    self.my_uniforms.view = zmath.lookAtLh(
-        zmath.loadArr3(.{ -1.5, -3.0, viewZ + 0.25 }),
-        zmath.loadArr3(.{ 0.0, 0.0, 0.0 }),
-        zmath.loadArr3(.{ 0.0, 0.0, 1.0 }),
-    );
 
     // Allocate and update the entire uniform struct
     const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
@@ -243,6 +357,30 @@ pub fn update(self: *App) !void {
         self.createDepthBuffer();
 
         self.updatePerspective();
+    }
+}
+
+fn updateDragInertia(self: *App) void {
+    const eps: f32 = 1e-4;
+    // Apply inertia only when the user released the click
+    if (!self.drag_state.active) {
+        // Avoid updating the matrix when the velocity is no longer noticeable
+        if (@abs(self.drag_state.velocity[0]) < eps and @abs(self.drag_state.velocity[1]) < eps) {
+            return;
+        }
+        self.camera.angles[0] += @as(f32, @floatCast(self.drag_state.velocity[0]));
+        self.camera.angles[1] += @as(f32, @floatCast(self.drag_state.velocity[1]));
+        // Clamp to avoid going too far when orbitting up/down
+        self.camera.angles[1] = zmath.clamp(
+            self.camera.angles[1],
+            -std.math.pi / 2.0 + 1e-5,
+            std.math.pi / 2.0 - 1e-5,
+        );
+        // Dampen the velocity so that it decreases exponentially and stops
+        // after a few frames
+        self.drag_state.velocity[0] *= DragState.inertia;
+        self.drag_state.velocity[1] *= DragState.inertia;
+        self.updateView();
     }
 }
 
