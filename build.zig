@@ -30,6 +30,13 @@ pub fn build(b: *std.Build) void {
     const zjpeg = b.dependency("zjpeg", .{});
     exe.root_module.addImport("zjpeg", zjpeg.module("jpeg"));
 
+    const zgui = b.dependency("zgui", .{
+        .shared = false,
+        .backend = .glfw_wgpu,
+    });
+    exe.root_module.addImport("zgui", zgui.module("root"));
+    exe.linkLibrary(zgui.artifact("imgui"));
+
     if (target.result.os.tag != .emscripten) {
         exe.linkLibrary(zglfw.artifact("glfw"));
         exe.linkLibrary(zgpu.artifact("zdawn"));

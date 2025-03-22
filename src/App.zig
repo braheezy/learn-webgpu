@@ -4,6 +4,7 @@ const zgpu = @import("zgpu");
 const zmath = @import("zmath");
 const obj = @import("obj");
 const jpeg = @import("zjpeg");
+const zgui = @import("zgui");
 
 const ResourceManager = @import("ResourceManager.zig");
 const VertexAttr = ResourceManager.VertexAttr;
@@ -11,6 +12,8 @@ const VertexAttr = ResourceManager.VertexAttr;
 const obj_file = "src/resources/fourareen/fourareen.obj";
 const vertex_text_file = "src/resources/pyramid.txt";
 const texture_file = "src/resources/fourareen/fourareen2K_albedo.jpg";
+
+const depth_format = zgpu.wgpu.TextureFormat.depth24_plus;
 
 const MyUniforms = struct {
     projection: zmath.Mat = undefined,
@@ -66,11 +69,13 @@ pub fn init(allocator: std.mem.Allocator) !*App {
     try app.createGeometry();
     try app.createPipeline(allocator);
     try app.createUniforms();
+    try app.createGui();
 
     return app;
 }
 
 pub fn deinit(self: *App) void {
+    destroyGui();
     self.vertex_buffer.release();
     self.cleanDepthBuffer();
     self.gfx.releaseResource(self.texture);
@@ -119,7 +124,7 @@ fn createApp(allocator: std.mem.Allocator) !*App {
                 .max_buffer_size = 150000 * @sizeOf(VertexAttr),
                 .max_vertex_buffer_array_stride = @sizeOf(VertexAttr),
                 .max_inter_stage_shader_components = 8,
-                .max_bind_groups = 1,
+                .max_bind_groups = 2,
                 .max_uniform_buffers_per_shader_stage = 1,
                 .max_uniform_buffer_binding_size = 16 * 4 * @sizeOf(f32),
                 .max_dynamic_uniform_buffers_per_pipeline_layout = 1,
@@ -212,6 +217,26 @@ pub fn isRunning(self: *App) bool {
     return !self.window.shouldClose() and self.window.getKey(.escape) != .press;
 }
 
+fn createGui(self: *App) !void {
+    zgui.init(self.allocator);
+    zgui.backend.init(
+        self.window,
+        self.gfx.device,
+        @intFromEnum(self.gfx.swapchain_descriptor.format),
+        @intFromEnum(depth_format),
+    );
+
+    zgui.io.setConfigFlags(.{
+        .dpi_enable_scale_fonts = true,
+        .dpi_enable_scale_viewport = true,
+    });
+}
+
+fn destroyGui() void {
+    zgui.backend.deinit();
+    zgui.deinit();
+}
+
 fn createWindow() !*zglfw.Window {
     try zglfw.init();
     zglfw.windowHint(.client_api, .no_api);
@@ -270,9 +295,6 @@ fn updateView(self: *App) void {
         zmath.Vec{ 0.0, 0.0, 0.0, 1.0 },
         zmath.Vec{ 0.0, 0.0, 1.0, 1.0 },
     );
-
-    const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
-    uni_mem.slice[0].view = self.my_uniforms.view;
 }
 
 fn createUniforms(self: *App) !void {
@@ -287,6 +309,12 @@ fn toRadians(degrees: f32) f32 {
 }
 
 pub fn update(self: *App) !void {
+    // Start ImGui frame before any rendering
+    zgui.backend.newFrame(
+        self.gfx.swapchain_descriptor.width,
+        self.gfx.swapchain_descriptor.height,
+    );
+
     const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
     const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
     const bind_group = self.gfx.lookupResource(self.bind_group) orelse unreachable;
@@ -344,6 +372,8 @@ pub fn update(self: *App) !void {
 
     pass.draw(self.vertex_count, 1, 0, 0);
 
+    self.updateGui(pass);
+
     pass.end();
     pass.release();
 
@@ -358,6 +388,40 @@ pub fn update(self: *App) !void {
 
         self.updatePerspective();
     }
+}
+
+var gui_counter: i32 = 0;
+var gui_f: f32 = 0.0;
+var gui_show_demo_window: bool = true;
+var gui_show_another_window: bool = false;
+var gui_clear_color: [4]f32 = .{ 0.45, 0.55, 0.60, 1.00 };
+
+fn updateGui(self: *App, pass: zgpu.wgpu.RenderPassEncoder) void {
+    _ = self;
+    if (zgui.begin("Hello, world!", .{})) {
+        zgui.text("This is some useful text.", .{});
+        _ = zgui.checkbox("Demo Window", .{ .v = &gui_show_demo_window });
+        _ = zgui.checkbox("Another Window", .{ .v = &gui_show_another_window });
+
+        _ = zgui.sliderFloat("float", .{
+            .v = &gui_f,
+            .min = 0.0,
+            .max = 1.0,
+        });
+        _ = zgui.colorEdit3("clear color", .{ .col = gui_clear_color[0..3] });
+
+        if (zgui.button("Button", .{})) {
+            gui_counter += 1;
+        }
+        zgui.sameLine(.{});
+        zgui.text("counter = {d}", .{gui_counter});
+
+        const framerate = zgui.io.getFramerate();
+        zgui.text("Application average {d:.3} ms/frame ({d:.1} FPS)", .{ 1000.0 / framerate, framerate });
+    }
+    zgui.end();
+
+    zgui.backend.draw(pass);
 }
 
 fn updateDragInertia(self: *App) void {
@@ -481,7 +545,7 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
     const depth_stencil = zgpu.wgpu.DepthStencilState{
         .depth_compare = .less,
         .depth_write_enabled = true,
-        .format = .depth24_plus,
+        .format = depth_format,
         .stencil_read_mask = 0,
         .stencil_write_mask = 0,
     };
@@ -499,6 +563,7 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .max_anisotropy = 1,
     });
 
+    // Create 3D model pipeline
     const pipeline_desc = zgpu.wgpu.RenderPipelineDescriptor{
         .vertex = .{
             .module = shader_module,
@@ -543,7 +608,7 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
 fn createDepthBuffer(self: *App) void {
     self.depth_texture = self.gfx.createTexture(.{
         .dimension = .tdim_2d,
-        .format = .depth24_plus,
+        .format = depth_format,
         .mip_level_count = 1,
         .sample_count = 1,
         .size = .{
@@ -553,7 +618,7 @@ fn createDepthBuffer(self: *App) void {
         },
         .usage = .{ .render_attachment = true },
         .view_format_count = 1,
-        .view_formats = &[_]zgpu.wgpu.TextureFormat{.depth24_plus},
+        .view_formats = &[_]zgpu.wgpu.TextureFormat{depth_format},
     });
 
     self.depth_view = self.gfx.createTextureView(self.depth_texture, .{
@@ -563,7 +628,7 @@ fn createDepthBuffer(self: *App) void {
         .base_mip_level = 0,
         .mip_level_count = 1,
         .dimension = .tvdim_2d,
-        .format = .depth24_plus,
+        .format = depth_format,
     });
 }
 

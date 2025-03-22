@@ -29,6 +29,10 @@
             .url = "git+https://github.com/braheezy/zjpeg#f0c4c61e3ad9922f82a3aba2b045d148ced6d4f3",
             .hash = "1220eaff964706e892d2aa5a5d4a4a97b203778fa971e7f25600ca04da5edcf5389b",
         },
+        .zgui = .{
+            .url = "git+https://github.com/zig-gamedev/zgui#5f0e01e8cd7f423a27ad56a712e9770a81d5d272",
+            .hash = "12209ee39f11d6100f84b848858b4048f208f70e06091ccf603879caf0e86fbd058a",
+        },
     },
 
     .paths = .{
