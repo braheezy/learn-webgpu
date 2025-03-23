@@ -7,6 +7,7 @@ const jpeg = @import("zjpeg");
 const zgui = @import("zgui");
 
 const gui = @import("gui.zig");
+const toRadians = @import("math_utils.zig").toRadians;
 
 const ResourceManager = @import("ResourceManager.zig");
 const VertexAttr = ResourceManager.VertexAttr;
@@ -47,6 +48,18 @@ const DragState = struct {
     const inertia: f32 = 0.9;
 };
 
+pub const Lighting = struct {
+    directions: [2][4]f32 = .{
+        .{ 0.0, 0.0, 0.0, 0.0 },
+        .{ 0.0, 0.0, 0.0, 0.0 },
+    },
+    colors: [2][4]f32 = .{
+        .{ 0.0, 0.0, 0.0, 0.0 },
+        .{ 0.0, 0.0, 0.0, 0.0 },
+    },
+    enable_gamma: u32 = 0,
+    padding: [3]u32 = [_]u32{0} ** 3,
+};
 const App = @This();
 
 allocator: std.mem.Allocator,
@@ -55,6 +68,7 @@ gfx: *zgpu.GraphicsContext = undefined,
 pipeline: zgpu.RenderPipelineHandle = undefined,
 vertex_buffer: zgpu.wgpu.Buffer = undefined,
 vertex_count: u32 = 0,
+lighting: Lighting = .{},
 bind_group: zgpu.BindGroupHandle = undefined,
 depth_texture: zgpu.TextureHandle = undefined,
 depth_view: zgpu.TextureViewHandle = undefined,
@@ -63,14 +77,18 @@ texture_view: ?zgpu.TextureViewHandle = null,
 my_uniforms: MyUniforms = .{},
 camera: Camera = .{},
 drag_state: DragState = .{},
+uniform_offset: u32 = 0,
+lighting_offset: u32 = 0,
 
 pub fn init(allocator: std.mem.Allocator) !*App {
     const app = try createApp(allocator);
     app.createDepthBuffer();
     try app.createTexture(texture_file);
     try app.createGeometry();
-    try app.createPipeline(allocator);
-    try app.createUniforms();
+    try app.createPipeline();
+    app.createUniforms();
+    app.createLightUniforms();
+
     try gui.create(
         allocator,
         app.window,
@@ -132,8 +150,8 @@ fn createApp(allocator: std.mem.Allocator) !*App {
                 .max_vertex_buffer_array_stride = @sizeOf(VertexAttr),
                 .max_inter_stage_shader_components = 8,
                 .max_bind_groups = 2,
-                .max_uniform_buffers_per_shader_stage = 1,
-                .max_uniform_buffer_binding_size = 16 * 4 * @sizeOf(f32),
+                .max_uniform_buffers_per_shader_stage = 2,
+                .max_uniform_buffer_binding_size = @max(@sizeOf(MyUniforms), @sizeOf(Lighting)),
                 .max_dynamic_uniform_buffers_per_pipeline_layout = 1,
                 .max_texture_dimension_1d = 2048,
                 .max_texture_dimension_2d = 2048,
@@ -293,30 +311,44 @@ fn updateView(self: *App) void {
     );
 }
 
-fn createUniforms(self: *App) !void {
+fn createUniforms(self: *App) void {
     self.updatePerspective();
 
     self.my_uniforms.model = zmath.identity();
     self.updateView();
 }
 
-fn toRadians(degrees: f32) f32 {
-    return degrees * std.math.pi / 180.0;
+fn createLightUniforms(self: *App) void {
+    self.lighting.directions[0] = zmath.Vec{ 0.5, -0.9, 0.1, 0.0 };
+    self.lighting.directions[1] = zmath.Vec{ 0.2, 0.4, 0.3, 0.0 };
+    self.lighting.colors[0] = zmath.Vec{ 1.0, 0.9, 0.6, 1.0 };
+    self.lighting.colors[1] = zmath.Vec{ 0.6, 0.9, 1.0, 1.0 };
+
+    const lighting_mem = self.gfx.uniformsAllocate(Lighting, 1);
+    lighting_mem.slice[0] = self.lighting;
+    self.lighting_offset = lighting_mem.offset;
 }
 
 pub fn update(self: *App) !void {
     zglfw.pollEvents();
 
-    gui.update(self.gfx.swapchain_descriptor.width, self.gfx.swapchain_descriptor.height);
+    gui.update(self);
 
     self.updateDragInertia();
 
     const time = @as(f32, @floatCast(self.gfx.stats.time));
     self.my_uniforms.time = time;
 
-    // Allocate and update the entire uniform struct
+    // Allocate and update the MyUniforms struct
     const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
     uni_mem.slice[0] = self.my_uniforms;
+
+    const lighting_mem = self.gfx.uniformsAllocate(Lighting, 1);
+    lighting_mem.slice[0] = self.lighting;
+
+    // Store offsets for use in drawing
+    self.uniform_offset = uni_mem.offset;
+    self.lighting_offset = lighting_mem.offset;
 }
 
 pub fn draw(self: *App) !void {
@@ -376,7 +408,14 @@ fn drawModel(self: *App, encoder: zgpu.wgpu.CommandEncoder, view: zgpu.wgpu.Text
 
     pass.setPipeline(pipeline);
     pass.setVertexBuffer(0, self.vertex_buffer, 0, self.vertex_buffer.getSize());
-    pass.setBindGroup(0, bind_group, null);
+
+    // Pass the dynamic offsets for both uniform buffers
+    pass.setBindGroup(
+        0,
+        bind_group,
+        &.{ self.uniform_offset, self.lighting_offset },
+    );
+
     pass.draw(self.vertex_count, 1, 0, 0);
 }
 
@@ -404,23 +443,31 @@ fn updateDragInertia(self: *App) void {
     }
 }
 
-fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
+fn createPipeline(self: *App) !void {
     const shader_module = try ResourceManager.loadShaderModule(
-        allocator,
+        self.allocator,
         "src/resources/shader.wgsl",
         self.gfx.device,
     );
     defer shader_module.release();
 
+    const uniform_bg = zgpu.bufferEntry(
+        0,
+        .{ .vertex = true, .fragment = true },
+        .uniform,
+        true,
+        0,
+    );
+    const lighting_uniform_bg = zgpu.bufferEntry(
+        3,
+        .{ .fragment = true },
+        .uniform,
+        true,
+        0,
+    );
+
     const bind_group_layout = self.gfx.createBindGroupLayout(&.{
-        .{
-            .binding = 0,
-            .visibility = .{ .vertex = true, .fragment = true },
-            .buffer = .{
-                .binding_type = .uniform,
-                .min_binding_size = @sizeOf(MyUniforms),
-            },
-        },
+        uniform_bg,
         .{
             .binding = 1,
             .visibility = .{ .fragment = true },
@@ -436,6 +483,7 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
                 .binding_type = .filtering,
             },
         },
+        lighting_uniform_bg,
     });
     defer self.gfx.releaseResource(bind_group_layout);
 
@@ -553,6 +601,12 @@ fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
         .{
             .binding = 2,
             .sampler_handle = sampler,
+        },
+        .{
+            .binding = 3,
+            .buffer_handle = self.gfx.uniforms.buffer,
+            .offset = 0,
+            .size = @sizeOf(Lighting),
         },
     });
 }
