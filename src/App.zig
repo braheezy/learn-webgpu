@@ -148,9 +148,15 @@ fn createCallbacks(self: *App) void {
 
     _ = zglfw.setCursorPosCallback(self.window, struct {
         fn cb(window: *zglfw.Window, xpos: f64, ypos: f64) callconv(.C) void {
+            // If ImGui is using the mouse, ignore the event
+            if (zgui.io.getWantCaptureMouse()) return;
+
             const app = window.getUserPointer(App) orelse unreachable;
             if (app.drag_state.active) {
-                const current_mouse_pos: [2]f64 = .{ xpos, ypos };
+                // Handle high DPI displays by scaling the mouse position
+                const scale = window.getContentScale();
+
+                const current_mouse_pos: [2]f64 = .{ xpos / scale[0], ypos / scale[1] };
                 const delta: [2]f64 = .{
                     (current_mouse_pos[0] - app.drag_state.start_position[0]) * DragState.sensitivity,
                     (current_mouse_pos[1] - app.drag_state.start_position[1]) * DragState.sensitivity,
@@ -181,6 +187,9 @@ fn createCallbacks(self: *App) void {
             action: zglfw.Action,
             mods: zglfw.Mods,
         ) callconv(.C) void {
+            // If ImGui is using the mouse, ignore the event
+            if (zgui.io.getWantCaptureMouse()) return;
+
             const app = window.getUserPointer(App) orelse unreachable;
             _ = mods;
 
@@ -223,7 +232,7 @@ fn createGui(self: *App) !void {
         self.window,
         self.gfx.device,
         @intFromEnum(self.gfx.swapchain_descriptor.format),
-        @intFromEnum(depth_format),
+        @intFromEnum(zgpu.wgpu.TextureFormat.undef),
     );
 
     zgui.io.setConfigFlags(.{
@@ -372,10 +381,22 @@ pub fn update(self: *App) !void {
 
     pass.draw(self.vertex_count, 1, 0, 0);
 
-    self.updateGui(pass);
-
     pass.end();
     pass.release();
+
+    const gui_pass = zgpu.beginRenderPassSimple(
+        encoder,
+        .load,
+        view,
+        null,
+        null,
+        null,
+    );
+
+    self.updateGui(gui_pass);
+
+    gui_pass.end();
+    gui_pass.release();
 
     const command_buffer = encoder.finish(null);
     defer command_buffer.release();
