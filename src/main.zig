@@ -15,5 +15,6 @@ pub fn main() !void {
 
     while (app.isRunning()) {
         try app.update();
+        try app.draw();
     }
 }

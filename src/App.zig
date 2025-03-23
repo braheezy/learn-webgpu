@@ -6,6 +6,8 @@ const obj = @import("obj");
 const jpeg = @import("zjpeg");
 const zgui = @import("zgui");
 
+const gui = @import("gui.zig");
+
 const ResourceManager = @import("ResourceManager.zig");
 const VertexAttr = ResourceManager.VertexAttr;
 
@@ -25,7 +27,7 @@ const MyUniforms = struct {
 };
 
 const Camera = struct {
-    angles: [2]f32 = .{ 0.0, 0.0 },
+    angles: [2]f32 = .{ 0.8, 0.5 },
     zoom: f32 = -1.2,
 };
 
@@ -69,13 +71,18 @@ pub fn init(allocator: std.mem.Allocator) !*App {
     try app.createGeometry();
     try app.createPipeline(allocator);
     try app.createUniforms();
-    try app.createGui();
+    try gui.create(
+        allocator,
+        app.window,
+        app.gfx.device,
+        app.gfx.swapchain_descriptor.format,
+    );
 
     return app;
 }
 
 pub fn deinit(self: *App) void {
-    destroyGui();
+    gui.destroy();
     self.vertex_buffer.release();
     self.cleanDepthBuffer();
     self.gfx.releaseResource(self.texture);
@@ -226,26 +233,6 @@ pub fn isRunning(self: *App) bool {
     return !self.window.shouldClose() and self.window.getKey(.escape) != .press;
 }
 
-fn createGui(self: *App) !void {
-    zgui.init(self.allocator);
-    zgui.backend.init(
-        self.window,
-        self.gfx.device,
-        @intFromEnum(self.gfx.swapchain_descriptor.format),
-        @intFromEnum(zgpu.wgpu.TextureFormat.undef),
-    );
-
-    zgui.io.setConfigFlags(.{
-        .dpi_enable_scale_fonts = true,
-        .dpi_enable_scale_viewport = true,
-    });
-}
-
-fn destroyGui() void {
-    zgui.backend.deinit();
-    zgui.deinit();
-}
-
 fn createWindow() !*zglfw.Window {
     try zglfw.init();
     zglfw.windowHint(.client_api, .no_api);
@@ -318,13 +305,44 @@ fn toRadians(degrees: f32) f32 {
 }
 
 pub fn update(self: *App) !void {
-    // Start ImGui frame before any rendering
-    zgui.backend.newFrame(
-        self.gfx.swapchain_descriptor.width,
-        self.gfx.swapchain_descriptor.height,
-    );
+    zglfw.pollEvents();
 
+    gui.update(self.gfx.swapchain_descriptor.width, self.gfx.swapchain_descriptor.height);
+
+    self.updateDragInertia();
+
+    const time = @as(f32, @floatCast(self.gfx.stats.time));
+    self.my_uniforms.time = time;
+
+    // Allocate and update the entire uniform struct
+    const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
+    uni_mem.slice[0] = self.my_uniforms;
+}
+
+pub fn draw(self: *App) !void {
     const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
+    const view = self.gfx.swapchain.getCurrentTextureView();
+    defer view.release();
+
+    const encoder = self.gfx.device.createCommandEncoder(null);
+    defer encoder.release();
+
+    try self.drawModel(encoder, view, depth_view);
+    try gui.draw(encoder, view);
+
+    const command_buffer = encoder.finish(null);
+    defer command_buffer.release();
+
+    self.gfx.submit(&.{command_buffer});
+
+    if (self.gfx.present() == .swap_chain_resized) {
+        self.cleanDepthBuffer();
+        self.createDepthBuffer();
+        self.updatePerspective();
+    }
+}
+
+fn drawModel(self: *App, encoder: zgpu.wgpu.CommandEncoder, view: zgpu.wgpu.TextureView, depth_view: zgpu.wgpu.TextureView) !void {
     const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
     const bind_group = self.gfx.lookupResource(self.bind_group) orelse unreachable;
 
@@ -340,21 +358,6 @@ pub fn update(self: *App) !void {
         .stencil_read_only = .true,
     };
 
-    self.updateDragInertia();
-
-    self.gfx.device.tick();
-    zglfw.pollEvents();
-
-    const time = @as(f32, @floatCast(self.gfx.stats.time));
-    self.my_uniforms.time = time;
-
-    // Allocate and update the entire uniform struct
-    const uni_mem = self.gfx.uniformsAllocate(MyUniforms, 1);
-    uni_mem.slice[0] = self.my_uniforms;
-
-    const view = self.gfx.swapchain.getCurrentTextureView();
-    defer view.release();
-
     const color_attachment = [_]zgpu.wgpu.RenderPassColorAttachment{.{
         .view = view,
         .load_op = .clear,
@@ -368,81 +371,13 @@ pub fn update(self: *App) !void {
         .depth_stencil_attachment = &depth_attachment,
     };
 
-    const encoder = self.gfx.device.createCommandEncoder(null);
-    defer encoder.release();
-
     const pass = encoder.beginRenderPass(render_pass_info);
+    defer zgpu.endReleasePass(pass);
 
     pass.setPipeline(pipeline);
-
     pass.setVertexBuffer(0, self.vertex_buffer, 0, self.vertex_buffer.getSize());
-
     pass.setBindGroup(0, bind_group, null);
-
     pass.draw(self.vertex_count, 1, 0, 0);
-
-    pass.end();
-    pass.release();
-
-    const gui_pass = zgpu.beginRenderPassSimple(
-        encoder,
-        .load,
-        view,
-        null,
-        null,
-        null,
-    );
-
-    self.updateGui(gui_pass);
-
-    gui_pass.end();
-    gui_pass.release();
-
-    const command_buffer = encoder.finish(null);
-    defer command_buffer.release();
-
-    self.gfx.submit(&.{command_buffer});
-
-    if (self.gfx.present() == .swap_chain_resized) {
-        self.cleanDepthBuffer();
-        self.createDepthBuffer();
-
-        self.updatePerspective();
-    }
-}
-
-var gui_counter: i32 = 0;
-var gui_f: f32 = 0.0;
-var gui_show_demo_window: bool = true;
-var gui_show_another_window: bool = false;
-var gui_clear_color: [4]f32 = .{ 0.45, 0.55, 0.60, 1.00 };
-
-fn updateGui(self: *App, pass: zgpu.wgpu.RenderPassEncoder) void {
-    _ = self;
-    if (zgui.begin("Hello, world!", .{})) {
-        zgui.text("This is some useful text.", .{});
-        _ = zgui.checkbox("Demo Window", .{ .v = &gui_show_demo_window });
-        _ = zgui.checkbox("Another Window", .{ .v = &gui_show_another_window });
-
-        _ = zgui.sliderFloat("float", .{
-            .v = &gui_f,
-            .min = 0.0,
-            .max = 1.0,
-        });
-        _ = zgui.colorEdit3("clear color", .{ .col = gui_clear_color[0..3] });
-
-        if (zgui.button("Button", .{})) {
-            gui_counter += 1;
-        }
-        zgui.sameLine(.{});
-        zgui.text("counter = {d}", .{gui_counter});
-
-        const framerate = zgui.io.getFramerate();
-        zgui.text("Application average {d:.3} ms/frame ({d:.1} FPS)", .{ 1000.0 / framerate, framerate });
-    }
-    zgui.end();
-
-    zgui.backend.draw(pass);
 }
 
 fn updateDragInertia(self: *App) void {
@@ -467,10 +402,6 @@ fn updateDragInertia(self: *App) void {
         self.drag_state.velocity[1] *= DragState.inertia;
         self.updateView();
     }
-}
-
-fn lerp(v0: f32, v1: f32, t: f32) f32 {
-    return v0 * (1.0 - t) + v1 * t;
 }
 
 fn createPipeline(self: *App, allocator: std.mem.Allocator) !void {
