@@ -23,6 +23,7 @@ const MyUniforms = struct {
     view: zmath.Mat = undefined,
     model: zmath.Mat = undefined,
     color: [4]f32 = .{ 0.0, 1.0, 0.4, 1.0 },
+    camera_world_position: [3]f32 = .{ 0.0, 0.0, 0.0 },
     time: f32 = 1.0,
     padding: [3]f32 = [_]f32{0} ** 3,
 };
@@ -58,7 +59,9 @@ pub const Lighting = struct {
         .{ 0.0, 0.0, 0.0, 0.0 },
     },
     enable_gamma: u32 = 0,
-    padding: [3]u32 = [_]u32{0} ** 3,
+    hardness: f32 = 32.0,
+    kd: f32 = 1.0,
+    ks: f32 = 0.5,
 };
 const App = @This();
 
@@ -148,7 +151,7 @@ fn createApp(allocator: std.mem.Allocator) !*App {
                 .max_vertex_buffers = 1,
                 .max_buffer_size = 150000 * @sizeOf(VertexAttr),
                 .max_vertex_buffer_array_stride = @sizeOf(VertexAttr),
-                .max_inter_stage_shader_components = 8,
+                .max_inter_stage_shader_components = 14,
                 .max_bind_groups = 2,
                 .max_uniform_buffers_per_shader_stage = 2,
                 .max_uniform_buffer_binding_size = @max(@sizeOf(MyUniforms), @sizeOf(Lighting)),
@@ -309,6 +312,7 @@ fn updateView(self: *App) void {
         zmath.Vec{ 0.0, 0.0, 0.0, 1.0 },
         zmath.Vec{ 0.0, 0.0, 1.0, 1.0 },
     );
+    self.my_uniforms.camera_world_position = .{ position[0], position[1], position[2] };
 }
 
 fn createUniforms(self: *App) void {
@@ -323,10 +327,6 @@ fn createLightUniforms(self: *App) void {
     self.lighting.directions[1] = zmath.Vec{ 0.2, 0.4, 0.3, 0.0 };
     self.lighting.colors[0] = zmath.Vec{ 1.0, 0.9, 0.6, 1.0 };
     self.lighting.colors[1] = zmath.Vec{ 0.6, 0.9, 1.0, 1.0 };
-
-    const lighting_mem = self.gfx.uniformsAllocate(Lighting, 1);
-    lighting_mem.slice[0] = self.lighting;
-    self.lighting_offset = lighting_mem.offset;
 }
 
 pub fn update(self: *App) !void {

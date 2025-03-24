@@ -53,6 +53,9 @@ pub fn update(
         _ = dragDirection("Direction: #0", &lighting.directions[0]);
         _ = zgui.colorEdit3("Color: #1", .{ .col = lighting.colors[1][0..3] });
         _ = zgui.dragFloat3("Direction: #1", .{ .v = lighting.directions[1][0..3] });
+        _ = zgui.sliderFloat("Hardness", .{ .v = &lighting.hardness, .min = 0.0, .max = 100.0 });
+        _ = zgui.sliderFloat("K Diffuse", .{ .v = &lighting.kd, .min = 0.0, .max = 1.0 });
+        _ = zgui.sliderFloat("K Specular", .{ .v = &lighting.ks, .min = 0.0, .max = 1.0 });
 
         var result: bool = lighting.enable_gamma != 0;
         if (zgui.checkbox("Enable Gamma Correction", .{ .v = &result })) {
