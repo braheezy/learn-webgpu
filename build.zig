@@ -29,6 +29,7 @@ pub fn build(b: *std.Build) void {
 
     const zjpeg = b.dependency("zjpeg", .{});
     exe.root_module.addImport("zjpeg", zjpeg.module("jpeg"));
+    exe.root_module.addImport("png", zjpeg.module("png"));
 
     const zgui = b.dependency("zgui", .{
         .shared = false,

@@ -12,9 +12,7 @@ const toRadians = @import("math_utils.zig").toRadians;
 const ResourceManager = @import("ResourceManager.zig");
 const VertexAttr = ResourceManager.VertexAttr;
 
-const obj_file = "src/resources/fourareen/fourareen.obj";
-const vertex_text_file = "src/resources/pyramid.txt";
-const texture_file = "src/resources/fourareen/fourareen2K_albedo.jpg";
+const obj_file = "src/resources/cylinder.obj";
 
 const depth_format = zgpu.wgpu.TextureFormat.depth24_plus;
 
@@ -75,8 +73,10 @@ lighting: Lighting = .{},
 bind_group: zgpu.BindGroupHandle = undefined,
 depth_texture: zgpu.TextureHandle = undefined,
 depth_view: zgpu.TextureViewHandle = undefined,
-texture: zgpu.TextureHandle = undefined,
-texture_view: ?zgpu.TextureViewHandle = null,
+base_color_texture: zgpu.TextureHandle = undefined,
+base_color_texture_view: ?zgpu.TextureViewHandle = null,
+normal_texture: zgpu.TextureHandle = undefined,
+normal_texture_view: ?zgpu.TextureViewHandle = null,
 my_uniforms: MyUniforms = .{},
 camera: Camera = .{},
 drag_state: DragState = .{},
@@ -86,7 +86,7 @@ lighting_offset: u32 = 0,
 pub fn init(allocator: std.mem.Allocator) !*App {
     const app = try createApp(allocator);
     app.createDepthBuffer();
-    try app.createTexture(texture_file);
+    try app.createTextures();
     try app.createGeometry();
     try app.createPipeline();
     app.createUniforms();
@@ -106,8 +106,8 @@ pub fn deinit(self: *App) void {
     gui.destroy();
     self.vertex_buffer.release();
     self.cleanDepthBuffer();
-    self.gfx.releaseResource(self.texture);
-    self.gfx.destroyResource(self.texture);
+    self.gfx.releaseResource(self.base_color_texture);
+    self.gfx.destroyResource(self.base_color_texture);
 
     self.gfx.destroy(self.allocator);
 
@@ -129,7 +129,7 @@ fn createApp(allocator: std.mem.Allocator) !*App {
     app.* = App{
         .allocator = allocator,
         .window = window,
-        .texture_view = null,
+        .base_color_texture_view = null,
     };
 
     app.gfx = try zgpu.GraphicsContext.create(allocator, .{
@@ -147,11 +147,11 @@ fn createApp(allocator: std.mem.Allocator) !*App {
     }, .{
         .required_limits = &zgpu.wgpu.RequiredLimits{
             .limits = .{
-                .max_vertex_attributes = 4,
+                .max_vertex_attributes = 6,
                 .max_vertex_buffers = 1,
                 .max_buffer_size = 150000 * @sizeOf(VertexAttr),
                 .max_vertex_buffer_array_stride = @sizeOf(VertexAttr),
-                .max_inter_stage_shader_components = 14,
+                .max_inter_stage_shader_components = 17,
                 .max_bind_groups = 2,
                 .max_uniform_buffers_per_shader_stage = 2,
                 .max_uniform_buffer_binding_size = @max(@sizeOf(MyUniforms), @sizeOf(Lighting)),
@@ -159,7 +159,7 @@ fn createApp(allocator: std.mem.Allocator) !*App {
                 .max_texture_dimension_1d = 2048,
                 .max_texture_dimension_2d = 2048,
                 .max_texture_array_layers = 1,
-                .max_sampled_textures_per_shader_stage = 1,
+                .max_sampled_textures_per_shader_stage = 2,
                 .max_samplers_per_shader_stage = 1,
             },
         },
@@ -458,8 +458,31 @@ fn createPipeline(self: *App) !void {
         true,
         0,
     );
+    const texture_bg: zgpu.wgpu.BindGroupLayoutEntry = .{
+        .binding = 1,
+        .visibility = .{ .fragment = true },
+        .texture = .{
+            .sample_type = .float,
+            .view_dimension = .tvdim_2d,
+        },
+    };
+    const normal_texture_bg: zgpu.wgpu.BindGroupLayoutEntry = .{
+        .binding = 2,
+        .visibility = .{ .fragment = true },
+        .texture = .{
+            .sample_type = .float,
+            .view_dimension = .tvdim_2d,
+        },
+    };
+    const sampler_bg: zgpu.wgpu.BindGroupLayoutEntry = .{
+        .binding = 3,
+        .visibility = .{ .fragment = true },
+        .sampler = .{
+            .binding_type = .filtering,
+        },
+    };
     const lighting_uniform_bg = zgpu.bufferEntry(
-        3,
+        4,
         .{ .fragment = true },
         .uniform,
         true,
@@ -468,21 +491,9 @@ fn createPipeline(self: *App) !void {
 
     const bind_group_layout = self.gfx.createBindGroupLayout(&.{
         uniform_bg,
-        .{
-            .binding = 1,
-            .visibility = .{ .fragment = true },
-            .texture = .{
-                .sample_type = .float,
-                .view_dimension = .tvdim_2d,
-            },
-        },
-        .{
-            .binding = 2,
-            .visibility = .{ .fragment = true },
-            .sampler = .{
-                .binding_type = .filtering,
-            },
-        },
+        texture_bg,
+        normal_texture_bg,
+        sampler_bg,
         lighting_uniform_bg,
     });
     defer self.gfx.releaseResource(bind_group_layout);
@@ -531,14 +542,28 @@ fn createPipeline(self: *App) !void {
         .offset = @offsetOf(VertexAttr, "uv"),
     };
 
+    const tangent_attribute = zgpu.wgpu.VertexAttribute{
+        .shader_location = 4,
+        .format = .float32x3,
+        .offset = @offsetOf(VertexAttr, "tangent"),
+    };
+
+    const bitangent_attribute = zgpu.wgpu.VertexAttribute{
+        .shader_location = 5,
+        .format = .float32x3,
+        .offset = @offsetOf(VertexAttr, "bitangent"),
+    };
+
     const vertex_buffer_layout = zgpu.wgpu.VertexBufferLayout{
         .array_stride = @sizeOf(VertexAttr),
-        .attribute_count = 4,
+        .attribute_count = 6,
         .attributes = &[_]zgpu.wgpu.VertexAttribute{
             position_attribute,
             normal_attribute,
             color_attribute,
             uv_attribute,
+            tangent_attribute,
+            bitangent_attribute,
         },
     };
 
@@ -596,14 +621,18 @@ fn createPipeline(self: *App) !void {
         },
         .{
             .binding = 1,
-            .texture_view_handle = self.texture_view,
+            .texture_view_handle = self.base_color_texture_view,
         },
         .{
             .binding = 2,
-            .sampler_handle = sampler,
+            .texture_view_handle = self.normal_texture_view,
         },
         .{
             .binding = 3,
+            .sampler_handle = sampler,
+        },
+        .{
+            .binding = 4,
             .buffer_handle = self.gfx.uniforms.buffer,
             .offset = 0,
             .size = @sizeOf(Lighting),
@@ -638,11 +667,17 @@ fn createDepthBuffer(self: *App) void {
     });
 }
 
-fn createTexture(self: *App, path: []const u8) !void {
-    self.texture = try ResourceManager.loadTexture(
+fn createTextures(self: *App) !void {
+    self.base_color_texture = try ResourceManager.loadTexture(
         self.allocator,
         self.gfx,
-        path,
-        &self.texture_view,
+        "src/resources/cobblestone/cobblestone_floor_08_diff_2k.jpg",
+        &self.base_color_texture_view,
+    );
+    self.normal_texture = try ResourceManager.loadTexture(
+        self.allocator,
+        self.gfx,
+        "src/resources/cobblestone/cobblestone_floor_08_nor_gl_2k.png",
+        &self.normal_texture_view,
     );
 }

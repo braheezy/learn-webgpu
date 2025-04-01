@@ -2,11 +2,15 @@ const std = @import("std");
 const zgpu = @import("zgpu");
 const obj = @import("obj");
 const jpeg = @import("zjpeg");
+const png = @import("png");
+const zmath = @import("zmath");
 
 const ResourceManager = @This();
 
 pub const VertexAttr = struct {
     position: [3]f32,
+    tangent: [3]f32,
+    bitangent: [3]f32,
     normal: [3]f32,
     color: [3]f32,
     uv: [2]f32,
@@ -24,7 +28,7 @@ pub fn loadGeometryFromObj(
     const obj_file_contents = try file.readToEndAlloc(allocator, 1024 * 1024 * 10);
     defer allocator.free(obj_file_contents);
 
-    // Load the OBJ model instead of using the text file
+    // Load the OBJ model
     var obj_model = try obj.parseObj(allocator, obj_file_contents);
     defer obj_model.deinit(allocator);
 
@@ -103,12 +107,42 @@ pub fn loadGeometryFromObj(
                         .normal = [3]f32{ nx, ny, nz },
                         .color = [3]f32{ r, g, b },
                         .uv = [2]f32{ u, v },
+                        .tangent = [3]f32{ 0.0, 0.0, 0.0 },
+                        .bitangent = [3]f32{ 0.0, 0.0, 0.0 },
                     });
                 }
             }
 
             // Move to the next face
             face_start += num_verts_in_face;
+        }
+    }
+
+    // Compute tangent, bitangent, and normal vectors for each triangle
+    const triangle_count = @divFloor(vertex_data.items.len, 3);
+    std.debug.print("Computing TBN for {d} triangles\n", .{triangle_count});
+
+    var t: usize = 0;
+    while (t < triangle_count) : (t += 1) {
+        const triangle_vertices = [3]VertexAttr{
+            vertex_data.items[3 * t],
+            vertex_data.items[3 * t + 1],
+            vertex_data.items[3 * t + 2],
+        };
+
+        // For each vertex in the triangle, compute its own TBN frame using its normal
+        for (0..3) |k| {
+            const tbn = computeTbnWithNormal(triangle_vertices, triangle_vertices[k].normal);
+
+            // Extract TBN columns
+            const T: @Vector(3, f32) = @Vector(3, f32){ tbn[0][0], tbn[0][1], tbn[0][2] };
+            const B: @Vector(3, f32) = @Vector(3, f32){ tbn[1][0], tbn[1][1], tbn[1][2] };
+            const N: @Vector(3, f32) = @Vector(3, f32){ tbn[2][0], tbn[2][1], tbn[2][2] };
+
+            // Assign to the current vertex only
+            vertex_data.items[3 * t + k].tangent = T;
+            vertex_data.items[3 * t + k].bitangent = B;
+            vertex_data.items[3 * t + k].normal = N;
         }
     }
 
@@ -139,7 +173,12 @@ pub fn loadTexture(
     path: []const u8,
     texture_view: *?zgpu.TextureViewHandle,
 ) !zgpu.TextureHandle {
-    const image = try jpeg.load(allocator, path);
+    const ext = std.fs.path.extension(path);
+    const image =
+        if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg"))
+            try jpeg.load(allocator, path)
+        else
+            try png.load(allocator, path);
     defer image.free(allocator);
 
     const bounds = image.bounds();
@@ -315,4 +354,109 @@ fn bitWidth(m: u32) u32 {
         value >>= 1;
     }
     return width;
+}
+
+/// Compute the TBN local to a triangle face from its corners and return it as
+/// a matrix whose columns are the T, B and N vectors.
+pub fn computeTbn(corners: [3]VertexAttr) zmath.Mat {
+    const pos_vec = zmath.loadArr3(corners[0].position);
+    const pos_vec1 = zmath.loadArr3(corners[1].position);
+    const pos_vec2 = zmath.loadArr3(corners[2].position);
+    const uv_vec = zmath.loadArr2(corners[0].uv);
+    const uv_vec1 = zmath.loadArr2(corners[1].uv);
+    const uv_vec2 = zmath.loadArr2(corners[2].uv);
+
+    const e_pos1 = pos_vec1 - pos_vec;
+    const e_pos2 = pos_vec2 - pos_vec;
+
+    const eUV1 = uv_vec1 - uv_vec;
+    const eUV2 = uv_vec2 - uv_vec;
+
+    // Calculate tangent (T)
+    const T = zmath.normalize3(
+        e_pos1 * zmath.splat(zmath.Vec, eUV2[1]) -
+            e_pos2 * zmath.splat(zmath.Vec, eUV1[1]),
+    );
+
+    // Calculate bitangent (B)
+    const B = zmath.normalize3(
+        e_pos2 * zmath.splat(zmath.Vec, eUV1[0]) -
+            e_pos1 * zmath.splat(zmath.Vec, eUV2[0]),
+    );
+
+    // Calculate normal (N) as cross product of T and B
+    const N = zmath.cross3(T, B);
+
+    // Return matrix with T, B, N as columns
+    return zmath.loadMat(
+        &.{
+            T[0], B[0], N[0], 0.0,
+            T[1], B[1], N[1], 0.0,
+            T[2], B[2], N[2], 0.0,
+            0.0,  0.0,  0.0,  1.0,
+        },
+    );
+}
+
+/// Compute the TBN with an expected normal direction to improve smoothness and orientation
+pub fn computeTbnWithNormal(corners: [3]VertexAttr, expected_normal: [3]f32) zmath.Mat {
+    // Initial calculation as in the original function
+    const pos_vec = zmath.loadArr3(corners[0].position);
+    const pos_vec1 = zmath.loadArr3(corners[1].position);
+    const pos_vec2 = zmath.loadArr3(corners[2].position);
+    const uv_vec = zmath.loadArr2(corners[0].uv);
+    const uv_vec1 = zmath.loadArr2(corners[1].uv);
+    const uv_vec2 = zmath.loadArr2(corners[2].uv);
+
+    const e_pos1 = pos_vec1 - pos_vec;
+    const e_pos2 = pos_vec2 - pos_vec;
+
+    const eUV1 = uv_vec1 - uv_vec;
+    const eUV2 = uv_vec2 - uv_vec;
+
+    // Calculate tangent (T) and bitangent (B)
+    var T = zmath.normalize3(
+        e_pos1 * zmath.splat(zmath.Vec, eUV2[1]) -
+            e_pos2 * zmath.splat(zmath.Vec, eUV1[1]),
+    );
+
+    var B = zmath.normalize3(
+        e_pos2 * zmath.splat(zmath.Vec, eUV1[0]) -
+            e_pos1 * zmath.splat(zmath.Vec, eUV2[0]),
+    );
+
+    // Compute the geometric normal
+    var N = zmath.normalize3(zmath.cross3(T, B));
+
+    // Load the expected normal
+    const expected_N = zmath.normalize3(zmath.loadArr3(expected_normal));
+
+    // Fix overall orientation - if N and expectedN point in opposite directions
+    const dot_product = zmath.dot3(N, expected_N)[0];
+    if (dot_product < 0.0) {
+        T = T * zmath.splat(zmath.Vec, -1.0);
+        B = B * zmath.splat(zmath.Vec, -1.0);
+        N = N * zmath.splat(zmath.Vec, -1.0);
+    }
+
+    // Use the expected normal
+    N = expected_N;
+
+    // Orthogonalize T with respect to N
+    // T = T - (T·N)N
+    const t_dot_n = zmath.dot3(T, N)[0];
+    T = zmath.normalize3(T - (N * zmath.splat(zmath.Vec, t_dot_n)));
+
+    // Recompute B from N and T
+    B = zmath.normalize3(zmath.cross3(N, T));
+
+    // Return matrix with T, B, N as columns
+    return zmath.loadMat(
+        &.{
+            T[0], B[0], N[0], 0.0,
+            T[1], B[1], N[1], 0.0,
+            T[2], B[2], N[2], 0.0,
+            0.0,  0.0,  0.0,  1.0,
+        },
+    );
 }
