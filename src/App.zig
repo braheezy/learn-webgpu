@@ -1,6 +1,7 @@
 const std = @import("std");
 const zglfw = @import("zglfw");
-const zgpu = @import("zgpu");
+const zgpu = @import("zgpu.zig");
+const wgpu = @import("wgpu");
 const zmath = @import("zmath");
 const obj = @import("obj");
 const jpeg = @import("zjpeg");
@@ -66,17 +67,17 @@ const App = @This();
 allocator: std.mem.Allocator,
 window: *zglfw.Window,
 gfx: *zgpu.GraphicsContext = undefined,
-pipeline: zgpu.RenderPipelineHandle = undefined,
-vertex_buffer: zgpu.wgpu.Buffer = undefined,
+pipeline: *wgpu.RenderPipeline = undefined,
+vertex_buffer: *wgpu.Buffer = undefined,
 vertex_count: u32 = 0,
 lighting: Lighting = .{},
-bind_group: zgpu.BindGroupHandle = undefined,
-depth_texture: zgpu.TextureHandle = undefined,
-depth_view: zgpu.TextureViewHandle = undefined,
-base_color_texture: zgpu.TextureHandle = undefined,
-base_color_texture_view: ?zgpu.TextureViewHandle = null,
-normal_texture: zgpu.TextureHandle = undefined,
-normal_texture_view: ?zgpu.TextureViewHandle = null,
+bind_group: *wgpu.BindGroup = undefined,
+depth_texture: *wgpu.Texture = undefined,
+depth_view: *wgpu.TextureView = undefined,
+base_color_texture: *wgpu.Texture = undefined,
+base_color_texture_view: ?*wgpu.TextureView = null,
+normal_texture: *wgpu.Texture = undefined,
+normal_texture_view: ?*wgpu.TextureView = null,
 my_uniforms: MyUniforms = .{},
 camera: Camera = .{},
 drag_state: DragState = .{},
