@@ -26,8 +26,8 @@
             .hash = "12206ad647f7dc54ca49a9c89c79b4bec1572d7fbf7d4878ed33c953c3f0b92ab3bc",
         },
         .zjpeg = .{
-            .url = "git+https://github.com/braheezy/zjpeg#1b1a5b02b0f7e6b3bf135e776f30ebcf7f5238d4",
-            .hash = "122096aa9845f103f8d1b26987cdba4473146ff6930e9088c0f0139ba48d9331c967",
+            .url = "git+https://github.com/braheezy/zjpeg#2860cc7ec36cf6040c1269e77638b0137e3ef85a",
+            .hash = "1220a74f9418cf0204fddef3f06514087f9f3e0a0797e358c6821831a66f93638061",
         },
         .zgui = .{
             .url = "git+https://github.com/zig-gamedev/zgui#5f0e01e8cd7f423a27ad56a712e9770a81d5d272",
