@@ -5,6 +5,10 @@
     .fingerprint = 0x1390a97a30e1fb89,
 
     .dependencies = .{
+        .zpool = .{
+            .url = "https://github.com/zig-gamedev/zpool/archive/99a4c74ec26b1f327209782565b4adaf1c1d610f.tar.gz",
+            .hash = "zpool-0.11.0-dev-bG692eY7AQDLTkjTbgnbg_-qgjmxUCg8hNpN1kZRrIlW",
+        },
         .zglfw = .{
             .url = "https://github.com/zig-gamedev/zglfw/archive/e9bd486903b5904b6d4e27b8b3771b138a667ef1.tar.gz",
             .hash = "12209fb981e7aab58c2f9062ab526bd43df3d7953aa41e131a173c37ad35d10b1132",

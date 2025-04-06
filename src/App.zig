@@ -146,7 +146,7 @@ fn createApp(allocator: std.mem.Allocator) !*App {
         .fn_getWaylandSurface = @ptrCast(&zglfw.getWaylandWindow),
         .fn_getCocoaWindow = @ptrCast(&zglfw.getCocoaWindow),
     }, .{
-        .required_limits = &zgpu.wgpu.RequiredLimits{
+        .required_limits = &wgpu.RequiredLimits{
             .limits = .{
                 .max_vertex_attributes = 6,
                 .max_vertex_buffers = 1,

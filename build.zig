@@ -31,6 +31,9 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("zjpeg", zjpeg.module("jpeg"));
     exe.root_module.addImport("png", zjpeg.module("png"));
 
+    const zpool = b.dependency("zpool", .{});
+    exe.root_module.addImport("zpool", zpool.module("root"));
+
     const wgpu_native_dep = b.dependency("wgpu", .{});
     exe.root_module.addImport("wgpu", wgpu_native_dep.module("wgpu"));
 
