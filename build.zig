@@ -27,9 +27,9 @@ pub fn build(b: *std.Build) void {
     const obj_mod = b.dependency("obj", .{ .target = target, .optimize = optimize });
     exe.root_module.addImport("obj", obj_mod.module("obj"));
 
-    const zjpeg = b.dependency("zjpeg", .{});
-    exe.root_module.addImport("zjpeg", zjpeg.module("jpeg"));
-    exe.root_module.addImport("png", zjpeg.module("png"));
+    const zpix = b.dependency("zpix", .{});
+    exe.root_module.addImport("zjpeg", zpix.module("jpeg"));
+    exe.root_module.addImport("png", zpix.module("png"));
 
     const zgui = b.dependency("zgui", .{
         .shared = false,

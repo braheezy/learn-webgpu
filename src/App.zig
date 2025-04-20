@@ -285,6 +285,7 @@ fn createGeometry(self: *App) !void {
 }
 
 fn updatePerspective(self: *App) void {
+    std.debug.print("updatePerspective: width: {d}, height: {d}\n", .{ self.gfx.swapchain_descriptor.width, self.gfx.swapchain_descriptor.height });
     self.my_uniforms.projection = zmath.perspectiveFovLh(
         toRadians(45.0),
         @as(f32, @floatFromInt(self.gfx.swapchain_descriptor.width)) / @as(f32, @floatFromInt(self.gfx.swapchain_descriptor.height)),
