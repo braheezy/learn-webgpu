@@ -120,7 +120,6 @@ pub fn loadGeometryFromObj(
 
     // Compute tangent, bitangent, and normal vectors for each triangle
     const triangle_count = @divFloor(vertex_data.items.len, 3);
-    std.debug.print("Computing TBN for {d} triangles\n", .{triangle_count});
 
     var t: usize = 0;
     while (t < triangle_count) : (t += 1) {

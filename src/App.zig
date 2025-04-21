@@ -280,12 +280,10 @@ fn createGeometry(self: *App) !void {
     };
     self.vertex_buffer = self.gfx.device.createBuffer(buffer_desc);
     // upload to buffer
-    std.debug.print("vertex_buffer size: {}\n", .{vertex_data.items.len});
     self.gfx.queue.writeBuffer(self.vertex_buffer, 0, VertexAttr, vertex_data.items);
 }
 
 fn updatePerspective(self: *App) void {
-    std.debug.print("updatePerspective: width: {d}, height: {d}\n", .{ self.gfx.swapchain_descriptor.width, self.gfx.swapchain_descriptor.height });
     self.my_uniforms.projection = zmath.perspectiveFovLh(
         toRadians(45.0),
         @as(f32, @floatFromInt(self.gfx.swapchain_descriptor.width)) / @as(f32, @floatFromInt(self.gfx.swapchain_descriptor.height)),
