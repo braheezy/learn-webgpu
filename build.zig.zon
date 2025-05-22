@@ -33,8 +33,8 @@
         },
         // image decoder
         .zpix = .{
-            .url = "git+https://github.com/braheezy/zpix#80dc79feede7023d36a142df8f20992e32dde5f6",
-            .hash = "zpix-0.2.0-Og3bwGoiCgCEJ5CX8AzpQWZooSJx6VcyOkxao0INNvT_",
+            .url = "git+https://github.com/braheezy/zpix#aa85c77c5a624f3c8aea45f436fb986b87908fe0",
+            .hash = "zpix-0.2.0-Og3bwJPZCgCUvRu6vlsaf1-ckpmINcaviA-KSmQJW_mh",
         },
         // Pre-compiled WebGPU libraries for different platforms
         .dawn_x86_64_windows_gnu = .{
