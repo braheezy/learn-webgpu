@@ -32,8 +32,8 @@ pub fn loadGeometryFromObj(
     var obj_model = try obj.parseObj(allocator, obj_file_contents);
     defer obj_model.deinit(allocator);
 
-    var vertex_data = std.ArrayList(VertexAttr).init(allocator);
-    errdefer vertex_data.deinit();
+    var vertex_data = std.ArrayList(VertexAttr).empty;
+    errdefer vertex_data.deinit(allocator);
 
     // Process each mesh in the OBJ model
     for (obj_model.meshes) |mesh| {
@@ -102,7 +102,7 @@ pub fn loadGeometryFromObj(
                     }
 
                     // Add position, normal, color and UV to the point data
-                    try vertex_data.append(VertexAttr{
+                    try vertex_data.append(allocator, VertexAttr{
                         .position = [3]f32{ px, py, pz },
                         .normal = [3]f32{ nx, ny, nz },
                         .color = [3]f32{ r, g, b },
@@ -158,7 +158,7 @@ pub fn loadShaderModule(al: std.mem.Allocator, path: []const u8, device: zgpu.wg
         al,
         1024 * 16,
         null,
-        @alignOf(u8),
+        .@"8",
         0,
     );
     defer al.free(contents);

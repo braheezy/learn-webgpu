@@ -4,9 +4,10 @@ const zgpu = @import("zgpu");
 const zmath = @import("zmath");
 const obj = @import("obj");
 const jpeg = @import("zjpeg");
-const zgui = @import("zgui");
+const config = @import("config");
+const zgui = if (config.gui) @import("zgui");
 
-const gui = @import("gui.zig");
+const gui = if (config.gui) @import("gui.zig");
 const toRadians = @import("math_utils.zig").toRadians;
 
 const ResourceManager = @import("ResourceManager.zig");
@@ -92,7 +93,7 @@ pub fn init(allocator: std.mem.Allocator) !*App {
     app.createUniforms();
     app.createLightUniforms();
 
-    try gui.create(
+    if (config.gui) try gui.create(
         allocator,
         app.window,
         app.gfx.device,
@@ -103,7 +104,7 @@ pub fn init(allocator: std.mem.Allocator) !*App {
 }
 
 pub fn deinit(self: *App) void {
-    gui.destroy();
+    if (config.gui) gui.destroy();
     self.vertex_buffer.release();
     self.cleanDepthBuffer();
     self.gfx.releaseResource(self.base_color_texture);
@@ -155,7 +156,7 @@ fn createApp(allocator: std.mem.Allocator) !*App {
                 .max_bind_groups = 2,
                 .max_uniform_buffers_per_shader_stage = 2,
                 .max_uniform_buffer_binding_size = @max(@sizeOf(MyUniforms), @sizeOf(Lighting)),
-                .max_dynamic_uniform_buffers_per_pipeline_layout = 1,
+                .max_dynamic_uniform_buffers_per_pipeline_layout = 2,
                 .max_texture_dimension_1d = 2048,
                 .max_texture_dimension_2d = 2048,
                 .max_texture_array_layers = 1,
@@ -175,9 +176,9 @@ fn createCallbacks(self: *App) void {
     zglfw.setWindowUserPointer(self.window, @ptrCast(self));
 
     _ = zglfw.setCursorPosCallback(self.window, struct {
-        fn cb(window: *zglfw.Window, xpos: f64, ypos: f64) callconv(.C) void {
+        fn cb(window: *zglfw.Window, xpos: f64, ypos: f64) callconv(.c) void {
             // If ImGui is using the mouse, ignore the event
-            if (zgui.io.getWantCaptureMouse()) return;
+            if (config.gui and zgui.io.getWantCaptureMouse()) return;
 
             const app = window.getUserPointer(App) orelse unreachable;
             if (app.drag_state.active) {
@@ -189,6 +190,7 @@ fn createCallbacks(self: *App) void {
                     (current_mouse_pos[0] - app.drag_state.start_position[0]) * DragState.sensitivity,
                     (current_mouse_pos[1] - app.drag_state.start_position[1]) * DragState.sensitivity,
                 };
+
                 app.camera.angles[0] = app.drag_state.start_camera.angles[0] + @as(f32, @floatCast(delta[0]));
                 app.camera.angles[1] = app.drag_state.start_camera.angles[1] + @as(f32, @floatCast(delta[1]));
                 // Clamp to avoid going too far when orbitting up/down
@@ -197,6 +199,7 @@ fn createCallbacks(self: *App) void {
                     -std.math.pi / 2.0 + 1e-5,
                     std.math.pi / 2.0 - 1e-5,
                 );
+
                 app.updateView();
 
                 app.drag_state.velocity = .{
@@ -214,9 +217,9 @@ fn createCallbacks(self: *App) void {
             button: zglfw.MouseButton,
             action: zglfw.Action,
             mods: zglfw.Mods,
-        ) callconv(.C) void {
+        ) callconv(.c) void {
             // If ImGui is using the mouse, ignore the event
-            if (zgui.io.getWantCaptureMouse()) return;
+            if (config.gui and zgui.io.getWantCaptureMouse()) return;
 
             const app = window.getUserPointer(App) orelse unreachable;
             _ = mods;
@@ -226,7 +229,8 @@ fn createCallbacks(self: *App) void {
                     .press => {
                         app.drag_state.active = true;
                         const cursor_pos = app.window.getCursorPos();
-                        app.drag_state.start_position = .{ cursor_pos[0], cursor_pos[1] };
+                        const scale = app.window.getContentScale();
+                        app.drag_state.start_position = .{ cursor_pos[0] / scale[0], cursor_pos[1] / scale[1] };
                         app.drag_state.start_camera = app.camera;
                     },
                     .release => {
@@ -239,7 +243,7 @@ fn createCallbacks(self: *App) void {
     }.cb);
 
     _ = zglfw.setScrollCallback(self.window, struct {
-        fn cb(window: *zglfw.Window, x_offset: f64, y_offset: f64) callconv(.C) void {
+        fn cb(window: *zglfw.Window, x_offset: f64, y_offset: f64) callconv(.c) void {
             const app = window.getUserPointer(App) orelse unreachable;
             _ = x_offset;
 
@@ -265,11 +269,11 @@ fn createWindow() !*zglfw.Window {
 }
 
 fn createGeometry(self: *App) !void {
-    const vertex_data = try ResourceManager.loadGeometryFromObj(
+    var vertex_data = try ResourceManager.loadGeometryFromObj(
         self.allocator,
         obj_file,
     );
-    defer vertex_data.deinit();
+    defer vertex_data.deinit(self.allocator);
     self.vertex_count = @intCast(vertex_data.items.len);
 
     const buffer_desc = zgpu.wgpu.BufferDescriptor{
@@ -286,7 +290,7 @@ fn createGeometry(self: *App) !void {
 fn updatePerspective(self: *App) void {
     self.my_uniforms.projection = zmath.perspectiveFovLh(
         toRadians(45.0),
-        @as(f32, @floatFromInt(self.gfx.swapchain_descriptor.width)) / @as(f32, @floatFromInt(self.gfx.swapchain_descriptor.height)),
+        @as(f32, @floatFromInt(self.gfx.width)) / @as(f32, @floatFromInt(self.gfx.height)),
         0.01,
         100,
     );
@@ -331,7 +335,7 @@ fn createLightUniforms(self: *App) void {
 pub fn update(self: *App) !void {
     zglfw.pollEvents();
 
-    gui.update(self);
+    if (config.gui) gui.update(self);
 
     self.updateDragInertia();
 
@@ -352,14 +356,14 @@ pub fn update(self: *App) !void {
 
 pub fn draw(self: *App) !void {
     const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
-    const view = self.gfx.swapchain.getCurrentTextureView();
+    const view = self.gfx.getCurrentTextureView();
     defer view.release();
 
     const encoder = self.gfx.device.createCommandEncoder(null);
     defer encoder.release();
 
     try self.drawModel(encoder, view, depth_view);
-    try gui.draw(encoder, view);
+    if (config.gui) try gui.draw(encoder, view);
 
     const command_buffer = encoder.finish(null);
     defer command_buffer.release();
@@ -646,8 +650,8 @@ fn createDepthBuffer(self: *App) void {
         .mip_level_count = 1,
         .sample_count = 1,
         .size = .{
-            .width = self.gfx.swapchain_descriptor.width,
-            .height = self.gfx.swapchain_descriptor.height,
+            .width = self.gfx.width,
+            .height = self.gfx.height,
             .depth_or_array_layers = 1,
         },
         .usage = .{ .render_attachment = true },
