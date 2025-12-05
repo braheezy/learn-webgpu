@@ -13,8 +13,8 @@
         },
         // Main WebGPU library
         .zgpu = .{
-            .url = "git+https://github.com/braheezy/zgpu#7e534a870c561de1b8137c91f2a514cf4f14c7dd",
-            .hash = "zgpu-0.13.0-nqFT5E7DCABBhcDzzq-QHSZkl6hBYzAepmMqUKqFrhgh",
+            .url = "git+https://github.com/braheezy/zgpu#4eb58f319dd3d0799c20f1dd0d1f5edcab6ea02e",
+            .hash = "zgpu-0.14.0-nqFT5CNGEgCeivW9ez6oNJj5kzkPmM0tKEYnAcIWB-Cu",
         },
         // Math library
         .zmath = .{
@@ -30,22 +30,12 @@
         .zgui = .{
             .url = "git+https://github.com/zig-gamedev/zgui#1082a309eb423bde95dce0d57db7f8a0a5091b33",
             .hash = "zgui-0.6.0-dev--L6sZAzobQDQSKMsQdqmeqqvgN3ck6AgpY5E0uWGqRhM",
+            .lazy = true,
         },
         // image decoder
         .zpix = .{
             .url = "git+https://github.com/braheezy/zpix#acc6ce1678a00766661086653c4a104846f46259",
             .hash = "zpix-0.3.0-Og3bwPJnDgDOu8JLs7YrEarsL_fDmN7xW0YtJxeHe7y6",
-        },
-        // Pre-compiled WebGPU libraries for different platforms
-        .dawn_x86_64_linux_gnu = .{
-            .url = "https://github.com/michal-z/webgpu_dawn-x86_64-linux-gnu/archive/7d70db023bf254546024629cbec5ee6113e12a42.tar.gz",
-            .hash = "12204a3519efd49ea2d7cf63b544492a3a771d37eda320f86380813376801e4cfa73",
-            .lazy = true,
-        },
-        .dawn_aarch64_macos = .{
-            .url = "https://github.com/michal-z/webgpu_dawn-aarch64-macos/archive/d2360cdfff0cf4a780cb77aa47c57aca03cc6dfe.tar.gz",
-            .hash = "N-V-__8AALVIRAIf5nfpx8-4mEo2RGsynVryPQPcHk95qFM5",
-            .lazy = true,
         },
     },
 

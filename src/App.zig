@@ -277,8 +277,8 @@ fn createGeometry(self: *App) !void {
     self.vertex_count = @intCast(vertex_data.items.len);
 
     const buffer_desc = zgpu.wgpu.BufferDescriptor{
-        .label = "Vertex buffer",
-        .usage = .{ .copy_dst = true, .vertex = true },
+        .label = .{ .data = "Vertex buffer", .length = 13 },
+        .usage = zgpu.wgpu.BufferUsages.copy_dst | zgpu.wgpu.BufferUsages.vertex,
         .size = vertex_data.items.len * @sizeOf(VertexAttr),
         .mapped_at_creation = .false,
     };
@@ -355,14 +355,13 @@ pub fn update(self: *App) !void {
 }
 
 pub fn draw(self: *App) !void {
-    const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
     const view = self.gfx.getCurrentTextureView();
     defer view.release();
 
     const encoder = self.gfx.device.createCommandEncoder(null);
     defer encoder.release();
 
-    try self.drawModel(encoder, view, depth_view);
+    try self.drawModel(encoder, view);
     if (config.gui) try gui.draw(encoder, view);
 
     const command_buffer = encoder.finish(null);
@@ -377,28 +376,24 @@ pub fn draw(self: *App) !void {
     }
 }
 
-fn drawModel(self: *App, encoder: zgpu.wgpu.CommandEncoder, view: zgpu.wgpu.TextureView, depth_view: zgpu.wgpu.TextureView) !void {
+fn drawModel(self: *App, encoder: zgpu.wgpu.CommandEncoder, view: zgpu.wgpu.TextureView) !void {
     const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
     const bind_group = self.gfx.lookupResource(self.bind_group) orelse unreachable;
 
-    const depth_attachment = zgpu.wgpu.RenderPassDepthStencilAttachment{
-        .view = depth_view,
-        .depth_clear_value = 1.0,
-        .depth_load_op = .clear,
-        .depth_store_op = .store,
-        .depth_read_only = .false,
-        .stencil_clear_value = 0,
-        .stencil_load_op = .undef,
-        .stencil_store_op = .undef,
-        .stencil_read_only = .true,
-    };
-
+    const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
     const color_attachment = [_]zgpu.wgpu.RenderPassColorAttachment{.{
         .view = view,
         .load_op = .clear,
         .store_op = .store,
         .clear_value = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 1.0 },
     }};
+
+    var depth_attachment = zgpu.wgpu.RenderPassDepthStencilAttachment{
+        .view = depth_view,
+        .depth_load_op = .clear,
+        .depth_store_op = .store,
+        .depth_clear_value = 1.0,
+    };
 
     const render_pass_info = zgpu.wgpu.RenderPassDescriptor{
         .color_attachments = &color_attachment,
@@ -456,14 +451,15 @@ fn createPipeline(self: *App) !void {
 
     const uniform_bg = zgpu.bufferEntry(
         0,
-        .{ .vertex = true, .fragment = true },
+        zgpu.wgpu.ShaderStages.vertex | zgpu.wgpu.ShaderStages.fragment,
         .uniform,
         true,
-        0,
+        @sizeOf(MyUniforms),
     );
     const texture_bg: zgpu.wgpu.BindGroupLayoutEntry = .{
         .binding = 1,
-        .visibility = .{ .fragment = true },
+        .visibility = zgpu.wgpu.ShaderStages.fragment,
+        .binding_array_size = 1,
         .texture = .{
             .sample_type = .float,
             .view_dimension = .tvdim_2d,
@@ -471,7 +467,8 @@ fn createPipeline(self: *App) !void {
     };
     const normal_texture_bg: zgpu.wgpu.BindGroupLayoutEntry = .{
         .binding = 2,
-        .visibility = .{ .fragment = true },
+        .visibility = zgpu.wgpu.ShaderStages.fragment,
+        .binding_array_size = 1,
         .texture = .{
             .sample_type = .float,
             .view_dimension = .tvdim_2d,
@@ -479,17 +476,18 @@ fn createPipeline(self: *App) !void {
     };
     const sampler_bg: zgpu.wgpu.BindGroupLayoutEntry = .{
         .binding = 3,
-        .visibility = .{ .fragment = true },
+        .visibility = zgpu.wgpu.ShaderStages.fragment,
+        .binding_array_size = 1,
         .sampler = .{
-            .binding_type = .filtering,
+            .type = .filtering,
         },
     };
     const lighting_uniform_bg = zgpu.bufferEntry(
         4,
-        .{ .fragment = true },
+        zgpu.wgpu.ShaderStages.fragment,
         .uniform,
         true,
-        0,
+        @sizeOf(Lighting),
     );
 
     const bind_group_layout = self.gfx.createBindGroupLayout(&.{
@@ -518,7 +516,7 @@ fn createPipeline(self: *App) !void {
                 .operation = .add,
             },
         },
-        .write_mask = .all,
+        .write_mask = zgpu.wgpu.ColorWriteMasks.all,
     }};
 
     const position_attribute = zgpu.wgpu.VertexAttribute{
@@ -570,14 +568,6 @@ fn createPipeline(self: *App) !void {
         },
     };
 
-    const depth_stencil = zgpu.wgpu.DepthStencilState{
-        .depth_compare = .less,
-        .depth_write_enabled = true,
-        .format = depth_format,
-        .stencil_read_mask = 0,
-        .stencil_write_mask = 0,
-    };
-
     const sampler = self.gfx.createSampler(.{
         .address_mode_u = .repeat,
         .address_mode_v = .repeat,
@@ -592,10 +582,16 @@ fn createPipeline(self: *App) !void {
     });
 
     // Create 3D model pipeline
+    const depth_stencil = zgpu.wgpu.DepthStencilState{
+        .format = depth_format,
+        .depth_write_enabled = zgpu.wgpu.OptionalBool.true,
+        .depth_compare = .less,
+    };
+
     const pipeline_desc = zgpu.wgpu.RenderPipelineDescriptor{
         .vertex = .{
             .module = shader_module,
-            .entry_point = "vs_main",
+            .entry_point = zgpu.wgpu.StringView.fromSlice("vs_main"),
             .buffer_count = 1,
             .buffers = &[_]zgpu.wgpu.VertexBufferLayout{vertex_buffer_layout},
         },
@@ -606,7 +602,7 @@ fn createPipeline(self: *App) !void {
         },
         .fragment = &zgpu.wgpu.FragmentState{
             .module = shader_module,
-            .entry_point = "fs_main",
+            .entry_point = zgpu.wgpu.StringView.fromSlice("fs_main"),
             .target_count = color_targets.len,
             .targets = &color_targets,
         },
@@ -654,7 +650,7 @@ fn createDepthBuffer(self: *App) void {
             .height = self.gfx.height,
             .depth_or_array_layers = 1,
         },
-        .usage = .{ .render_attachment = true },
+        .usage = zgpu.wgpu.TextureUsages.render_attachment,
         .view_format_count = 1,
         .view_formats = &[_]zgpu.wgpu.TextureFormat{depth_format},
     });
@@ -667,6 +663,8 @@ fn createDepthBuffer(self: *App) void {
         .mip_level_count = 1,
         .dimension = .tvdim_2d,
         .format = depth_format,
+        .usage = zgpu.wgpu.TextureUsages.render_attachment,
+        .label = .{ .data = "Depth view", .length = 10 },
     });
 }
 
