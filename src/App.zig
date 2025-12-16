@@ -63,7 +63,6 @@ pub const Lighting = struct {
     ks: f32 = 0.5,
 };
 const App = @This();
-
 allocator: std.mem.Allocator,
 window: *zglfw.Window,
 gfx: *zgpu.GraphicsContext = undefined,
@@ -261,7 +260,7 @@ pub fn isRunning(self: *App) bool {
 fn createWindow() !*zglfw.Window {
     try zglfw.init();
     zglfw.windowHint(.client_api, .no_api);
-    zglfw.windowHint(.resizable, true);
+    zglfw.windowHint(.resizable, false);
 
     const window = try zglfw.createWindow(640, 480, "Learn WebGPU", null);
 
@@ -277,8 +276,11 @@ fn createGeometry(self: *App) !void {
     self.vertex_count = @intCast(vertex_data.items.len);
 
     const buffer_desc = zgpu.wgpu.BufferDescriptor{
-        .label = .{ .data = "Vertex buffer", .length = 13 },
-        .usage = zgpu.wgpu.BufferUsages.copy_dst | zgpu.wgpu.BufferUsages.vertex,
+        .label = zgpu.wgpu.compat.bufferLabel("Vertex buffer"),
+        .usage = zgpu.wgpu.combineBufferUsage(
+            zgpu.wgpu.BufferUsages.copy_dst,
+            zgpu.wgpu.BufferUsages.vertex,
+        ),
         .size = vertex_data.items.len * @sizeOf(VertexAttr),
         .mapped_at_creation = .false,
     };
@@ -355,13 +357,14 @@ pub fn update(self: *App) !void {
 }
 
 pub fn draw(self: *App) !void {
+    const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
     const view = self.gfx.getCurrentTextureView();
     defer view.release();
 
     const encoder = self.gfx.device.createCommandEncoder(null);
     defer encoder.release();
 
-    try self.drawModel(encoder, view);
+    try self.drawModel(encoder, view, depth_view);
     if (config.gui) try gui.draw(encoder, view);
 
     const command_buffer = encoder.finish(null);
@@ -376,24 +379,28 @@ pub fn draw(self: *App) !void {
     }
 }
 
-fn drawModel(self: *App, encoder: zgpu.wgpu.CommandEncoder, view: zgpu.wgpu.TextureView) !void {
+fn drawModel(self: *App, encoder: zgpu.wgpu.CommandEncoder, view: zgpu.wgpu.TextureView, depth_view: zgpu.wgpu.TextureView) !void {
     const pipeline = self.gfx.lookupResource(self.pipeline) orelse unreachable;
     const bind_group = self.gfx.lookupResource(self.bind_group) orelse unreachable;
 
-    const depth_view = self.gfx.lookupResource(self.depth_view) orelse unreachable;
+    const depth_attachment = zgpu.wgpu.RenderPassDepthStencilAttachment{
+        .view = depth_view,
+        .depth_clear_value = 1.0,
+        .depth_load_op = .clear,
+        .depth_store_op = .store,
+        .depth_read_only = .false,
+        .stencil_clear_value = 0,
+        .stencil_load_op = .undef,
+        .stencil_store_op = .undef,
+        .stencil_read_only = .true,
+    };
+
     const color_attachment = [_]zgpu.wgpu.RenderPassColorAttachment{.{
         .view = view,
         .load_op = .clear,
         .store_op = .store,
         .clear_value = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 1.0 },
     }};
-
-    var depth_attachment = zgpu.wgpu.RenderPassDepthStencilAttachment{
-        .view = depth_view,
-        .depth_load_op = .clear,
-        .depth_store_op = .store,
-        .depth_clear_value = 1.0,
-    };
 
     const render_pass_info = zgpu.wgpu.RenderPassDescriptor{
         .color_attachments = &color_attachment,
@@ -451,15 +458,17 @@ fn createPipeline(self: *App) !void {
 
     const uniform_bg = zgpu.bufferEntry(
         0,
-        zgpu.wgpu.ShaderStages.vertex | zgpu.wgpu.ShaderStages.fragment,
+        zgpu.wgpu.combineShaderStages(
+            zgpu.wgpu.ShaderStages.vertex,
+            zgpu.wgpu.ShaderStages.fragment,
+        ),
         .uniform,
         true,
-        @sizeOf(MyUniforms),
+        0,
     );
     const texture_bg: zgpu.wgpu.BindGroupLayoutEntry = .{
         .binding = 1,
         .visibility = zgpu.wgpu.ShaderStages.fragment,
-        .binding_array_size = 1,
         .texture = .{
             .sample_type = .float,
             .view_dimension = .tvdim_2d,
@@ -468,7 +477,6 @@ fn createPipeline(self: *App) !void {
     const normal_texture_bg: zgpu.wgpu.BindGroupLayoutEntry = .{
         .binding = 2,
         .visibility = zgpu.wgpu.ShaderStages.fragment,
-        .binding_array_size = 1,
         .texture = .{
             .sample_type = .float,
             .view_dimension = .tvdim_2d,
@@ -477,17 +485,14 @@ fn createPipeline(self: *App) !void {
     const sampler_bg: zgpu.wgpu.BindGroupLayoutEntry = .{
         .binding = 3,
         .visibility = zgpu.wgpu.ShaderStages.fragment,
-        .binding_array_size = 1,
-        .sampler = .{
-            .type = .filtering,
-        },
+        .sampler = zgpu.wgpu.compat.samplerLayout(.filtering),
     };
     const lighting_uniform_bg = zgpu.bufferEntry(
         4,
         zgpu.wgpu.ShaderStages.fragment,
         .uniform,
         true,
-        @sizeOf(Lighting),
+        0,
     );
 
     const bind_group_layout = self.gfx.createBindGroupLayout(&.{
@@ -568,6 +573,14 @@ fn createPipeline(self: *App) !void {
         },
     };
 
+    const depth_stencil = zgpu.wgpu.DepthStencilState{
+        .depth_compare = .less,
+        .depth_write_enabled = zgpu.wgpu.compat.depthWriteEnabled(),
+        .format = depth_format,
+        .stencil_read_mask = 0,
+        .stencil_write_mask = 0,
+    };
+
     const sampler = self.gfx.createSampler(.{
         .address_mode_u = .repeat,
         .address_mode_v = .repeat,
@@ -582,16 +595,12 @@ fn createPipeline(self: *App) !void {
     });
 
     // Create 3D model pipeline
-    const depth_stencil = zgpu.wgpu.DepthStencilState{
-        .format = depth_format,
-        .depth_write_enabled = zgpu.wgpu.OptionalBool.true,
-        .depth_compare = .less,
-    };
-
+    const vertex_entry_point = zgpu.wgpu.compat.shaderEntryPoint("vs_main");
+    const fragment_entry_point = zgpu.wgpu.compat.shaderEntryPoint("fs_main");
     const pipeline_desc = zgpu.wgpu.RenderPipelineDescriptor{
         .vertex = .{
             .module = shader_module,
-            .entry_point = zgpu.wgpu.StringView.fromSlice("vs_main"),
+            .entry_point = vertex_entry_point,
             .buffer_count = 1,
             .buffers = &[_]zgpu.wgpu.VertexBufferLayout{vertex_buffer_layout},
         },
@@ -602,7 +611,7 @@ fn createPipeline(self: *App) !void {
         },
         .fragment = &zgpu.wgpu.FragmentState{
             .module = shader_module,
-            .entry_point = zgpu.wgpu.StringView.fromSlice("fs_main"),
+            .entry_point = fragment_entry_point,
             .target_count = color_targets.len,
             .targets = &color_targets,
         },
@@ -663,8 +672,6 @@ fn createDepthBuffer(self: *App) void {
         .mip_level_count = 1,
         .dimension = .tvdim_2d,
         .format = depth_format,
-        .usage = zgpu.wgpu.TextureUsages.render_attachment,
-        .label = .{ .data = "Depth view", .length = 10 },
     });
 }
 

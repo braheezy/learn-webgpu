@@ -7,15 +7,13 @@ const zmath = @import("zmath");
 
 const ResourceManager = @This();
 
-// Order matters: this matches the WGSL VertexInput locations
-// 0: position, 1: normal, 2: color, 3: uv, 4: tangent, 5: bitangent.
 pub const VertexAttr = struct {
     position: [3]f32,
+    tangent: [3]f32,
+    bitangent: [3]f32,
     normal: [3]f32,
     color: [3]f32,
     uv: [2]f32,
-    tangent: [3]f32,
-    bitangent: [3]f32,
 };
 
 pub fn loadGeometryFromObj(
@@ -189,8 +187,7 @@ pub fn loadTexture(
     const texture_pixels = try image.rgbaPixels(allocator);
     defer allocator.free(texture_pixels);
 
-    // Keep a single mip level to avoid sub-256 bytes_per_row copies that Dawn rejects.
-    const mip_level_count: u32 = 1;
+    const mip_level_count = bitWidth(@max(width, height));
 
     const texture_desc = zgpu.wgpu.TextureDescriptor{
         .dimension = .tdim_2d,
@@ -202,14 +199,19 @@ pub fn loadTexture(
             .height = height,
             .depth_or_array_layers = 1,
         },
-        .usage = zgpu.wgpu.TextureUsages.texture_binding | zgpu.wgpu.TextureUsages.copy_dst,
+        .usage = zgpu.wgpu.combineUsage(
+            zgpu.wgpu.TextureUsages.texture_binding,
+            zgpu.wgpu.TextureUsages.copy_dst,
+        ),
         .view_format_count = 0,
         .view_formats = null,
     };
 
     const texture = gfx.createTexture(texture_desc);
 
-    if (texture_view.* == null) {
+    if (texture_view.*) |_| {
+        // do nothing if exists
+    } else {
         texture_view.* = gfx.createTextureView(texture, .{
             .aspect = .all,
             .base_array_layer = 0,
@@ -218,48 +220,15 @@ pub fn loadTexture(
             .mip_level_count = texture_desc.mip_level_count,
             .dimension = .tvdim_2d,
             .format = texture_desc.format,
-            .usage = zgpu.wgpu.TextureUsages.texture_binding,
-            .label = .{ .data = "Base texture view", .length = 17 },
         });
     }
 
-    // Upload level 0 with bytes_per_row padded to 256-byte alignment as required by Dawn.
-    const bytes_per_pixel: usize = 4;
-    const row_stride = width * bytes_per_pixel;
-    const padded_row_stride: usize = if (row_stride % 256 == 0) row_stride else row_stride + (256 - (row_stride % 256));
-
-    const total_size = padded_row_stride * height;
-    var upload = try allocator.alloc(u8, total_size);
-    defer allocator.free(upload);
-
-    var src_index: usize = 0;
-    var dst_index: usize = 0;
-    var y: usize = 0;
-    while (y < height) : (y += 1) {
-        @memcpy(upload[dst_index .. dst_index + row_stride], texture_pixels[src_index .. src_index + row_stride]);
-        src_index += row_stride;
-        dst_index += padded_row_stride;
-    }
-
-    gfx.queue.writeTexture(
-        .{
-            .texture = gfx.lookupResource(texture).?,
-            .mip_level = 0,
-            .origin = .{ .x = 0, .y = 0, .z = 0 },
-            .aspect = .all,
-        },
-        .{
-            .offset = 0,
-            .bytes_per_row = @intCast(padded_row_stride),
-            .rows_per_image = height,
-        },
-        .{
-            .width = width,
-            .height = height,
-            .depth_or_array_layers = 1,
-        },
-        u8,
-        upload,
+    writeMipMaps(
+        allocator,
+        gfx,
+        texture,
+        texture_desc.size,
+        texture_pixels,
     );
 
     return texture;
