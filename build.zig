@@ -2,7 +2,7 @@ const std = @import("std");
 
 const zgpu_backend = .dawn;
 // zgui depends on imgui, which depends on specific wgpu functions, so it needs to work with zgpu first.
-var enable_gui = false;
+const enable_gui = false;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -38,26 +38,19 @@ pub fn build(b: *std.Build) void {
     const obj_mod = b.dependency("obj", .{ .target = target, .optimize = optimize });
     exe.root_module.addImport("obj", obj_mod.module("obj"));
 
-    const zpix = b.dependency("zpix", .{});
-    exe.root_module.addImport("zjpeg", zpix.module("jpeg"));
-    exe.root_module.addImport("png", zpix.module("png"));
+    const zigimg = b.dependency("zigimg", .{ .target = target, .optimize = optimize });
+    exe.root_module.addImport("zigimg", zigimg.module("zigimg"));
 
     if (enable_gui) {
         if (b.lazyDependency("zgui", .{ .shared = false, .backend = .glfw_wgpu })) |zgui| {
             exe.root_module.addImport("zgui", zgui.module("root"));
-            exe.linkLibrary(zgui.artifact("imgui"));
+            exe.root_module.linkLibrary(zgui.artifact("imgui"));
         }
-        // const zgui = b.dependency("zgui", .{
-        //     .shared = false,
-        //     .backend = .glfw_wgpu,
-        // });
     }
     if (target.result.os.tag != .emscripten) {
-        exe.linkLibrary(zglfw.artifact("glfw"));
-        if (zgpu_backend == .dawn) {
-            // exe.linkLibrary(zgpu.artifact("zdawn"));
-        } else if (zgpu_backend == .wgpu) {
-            exe.linkLibrary(zgpu.artifact("zwgpu"));
+        exe.root_module.linkLibrary(zglfw.artifact("glfw"));
+        if (zgpu_backend == .wgpu) {
+            exe.root_module.linkLibrary(zgpu.artifact("zwgpu"));
         }
     }
 
@@ -91,7 +84,7 @@ pub fn build(b: *std.Build) void {
     tri.root_module.addImport("zmath", tri_zmath.module("root"));
 
     if (target.result.os.tag != .emscripten) {
-        tri.linkLibrary(tri_zglfw.artifact("glfw"));
+        tri.root_module.linkLibrary(tri_zglfw.artifact("glfw"));
     }
 
     const run_tri = b.addRunArtifact(tri);

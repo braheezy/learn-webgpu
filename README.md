@@ -15,4 +15,4 @@ See `build.zig.zon` for specifics, but of note:
 - [`zmath`](https://github.com/zig-gamedev/zmath): Quick maths
 - [`obj`](https://github.com/chip2n/zig-obj): For loading `.obj` files
 - [`zgui`](https://github.com/zig-gamedev/zgui): ImGui bindings
-- [`zpix`](https://github.com/braheezy/zpix): JPEG and PNG decoding
+- [`zigimg`](https://github.com/zigimg/zigimg): image decoding

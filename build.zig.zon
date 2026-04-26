@@ -3,39 +3,33 @@
 
     .version = "0.0.0",
     .fingerprint = 0x1390a97a892b245e,
-    .min_zig_version = "0.15.1",
+    .min_zig_version = "0.16.0",
 
     .dependencies = .{
         // To handle windowing and input
         .zglfw = .{
-            .url = "git+https://github.com/zig-gamedev/zglfw#6034a5623312c58bf5e64c1a2b686691c28575f4",
-            .hash = "zglfw-0.10.0-dev-zgVDNPKyIQCBi-wv_vxkvIQq1u0bP4D56Wszx_2mszc7",
+            .url = "git+https://github.com/zig-gamedev/zglfw#51003c105d23db378bb59ce415a387b22f1b0892",
+            .hash = "zglfw-0.10.0-dev-zgVDNIy4IQDJNRy4jrP1As-SZxfJpuWhU1iJ-wBab_VD",
         },
         // Main WebGPU library
         .zgpu = .{
-            .url = "git+https://github.com/braheezy/zgpu#4eb58f319dd3d0799c20f1dd0d1f5edcab6ea02e",
-            .hash = "zgpu-0.14.0-nqFT5CNGEgCeivW9ez6oNJj5kzkPmM0tKEYnAcIWB-Cu",
+            .url = "git+https://github.com/braheezy/zgpu#9d71285e1f9b86834aa2ad5051bd08350a53ecfa",
+            .hash = "zgpu-0.15.0-nqFT5MUaFQDt9wJqw_QcuNBMp9IvJDpgi52BWFWGu02S",
         },
         // Math library
         .zmath = .{
-            .url = "git+https://github.com/zig-gamedev/zmath#3a5955b2b72cd081563fbb084eff05bffd1e3fbb",
-            .hash = "zmath-0.11.0-dev-wjwivdMsAwD-xaLj76YHUq3t9JDH-X16xuMTmnDzqbu2",
+            .url = "git+https://github.com/zig-gamedev/zmath#9f7beb0753bd5cf885285dda8b00361c87c5b6b3",
+            .hash = "zmath-0.11.0-dev-wjwivTktAwA6BEsaW_p-6BFNCYSKMRFONlj6Fxkmuz9d",
         },
         // OBJ loader
         .obj = .{
-            .url = "git+https://github.com/chip2n/zig-obj#47410383c81d24454e370ffadc0980af7abea522",
-            .hash = "obj-3.0.2-v8OfitvLAADxUf6oMHCiWxjJILklY-IMKXlwX-Pv8rKu",
-        },
-        // imgui wrapper
-        .zgui = .{
-            .url = "git+https://github.com/zig-gamedev/zgui#1082a309eb423bde95dce0d57db7f8a0a5091b33",
-            .hash = "zgui-0.6.0-dev--L6sZAzobQDQSKMsQdqmeqqvgN3ck6AgpY5E0uWGqRhM",
-            .lazy = true,
+            .url = "git+https://github.com/chip2n/zig-obj#6070356009e761a4aef82256f1f431037ae97426",
+            .hash = "obj-3.0.2-v8OfivnLAAAgz1LaweX7sbe5ffod4VglAnYFCyjcPr1m",
         },
         // image decoder
-        .zpix = .{
-            .url = "git+https://github.com/braheezy/zpix#acc6ce1678a00766661086653c4a104846f46259",
-            .hash = "zpix-0.3.0-Og3bwPJnDgDOu8JLs7YrEarsL_fDmN7xW0YtJxeHe7y6",
+        .zigimg = .{
+            .url = "git+https://github.com/zigimg/zigimg#c7e81a13bff1cf4c5b7f085a8360f9d551143d40",
+            .hash = "zigimg-0.1.0-8_eo2uScFwCnpzB1Y2n_jf3euDfMEeCLxJE_E5_W5BNe",
         },
     },
 

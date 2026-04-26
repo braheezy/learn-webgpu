@@ -3,7 +3,6 @@ const zglfw = @import("zglfw");
 const zgpu = @import("zgpu");
 const zmath = @import("zmath");
 const obj = @import("obj");
-const jpeg = @import("zjpeg");
 const config = @import("config");
 const zgui = if (config.gui) @import("zgui");
 
@@ -64,6 +63,7 @@ pub const Lighting = struct {
 };
 const App = @This();
 allocator: std.mem.Allocator,
+io: std.Io,
 window: *zglfw.Window,
 gfx: *zgpu.GraphicsContext = undefined,
 pipeline: zgpu.RenderPipelineHandle = undefined,
@@ -83,8 +83,8 @@ drag_state: DragState = .{},
 uniform_offset: u32 = 0,
 lighting_offset: u32 = 0,
 
-pub fn init(allocator: std.mem.Allocator) !*App {
-    const app = try createApp(allocator);
+pub fn init(allocator: std.mem.Allocator, io: std.Io) !*App {
+    const app = try createApp(allocator, io);
     app.createDepthBuffer();
     try app.createTextures();
     try app.createGeometry();
@@ -122,12 +122,13 @@ fn cleanDepthBuffer(self: *App) void {
     self.gfx.releaseResource(self.depth_view);
 }
 
-fn createApp(allocator: std.mem.Allocator) !*App {
+fn createApp(allocator: std.mem.Allocator, io: std.Io) !*App {
     const window = try createWindow();
 
     const app = try allocator.create(App);
     app.* = App{
         .allocator = allocator,
+        .io = io,
         .window = window,
         .base_color_texture_view = null,
     };
@@ -193,7 +194,7 @@ fn createCallbacks(self: *App) void {
                 app.camera.angles[0] = app.drag_state.start_camera.angles[0] + @as(f32, @floatCast(delta[0]));
                 app.camera.angles[1] = app.drag_state.start_camera.angles[1] + @as(f32, @floatCast(delta[1]));
                 // Clamp to avoid going too far when orbitting up/down
-                app.camera.angles[1] = zmath.clamp(
+                app.camera.angles[1] = std.math.clamp(
                     app.camera.angles[1],
                     -std.math.pi / 2.0 + 1e-5,
                     std.math.pi / 2.0 - 1e-5,
@@ -247,7 +248,7 @@ fn createCallbacks(self: *App) void {
             _ = x_offset;
 
             app.camera.zoom += @as(f32, @floatCast(y_offset)) * DragState.scroll_sensitivity;
-            app.camera.zoom = zmath.clamp(app.camera.zoom, -2.0, 2.0);
+            app.camera.zoom = std.math.clamp(app.camera.zoom, -2.0, 2.0);
             app.updateView();
         }
     }.cb);
@@ -262,16 +263,13 @@ fn createWindow() !*zglfw.Window {
     zglfw.windowHint(.client_api, .no_api);
     zglfw.windowHint(.resizable, false);
 
-    const window = try zglfw.createWindow(640, 480, "Learn WebGPU", null);
+    const window = try zglfw.createWindow(640, 480, "Learn WebGPU", null, null);
 
     return window;
 }
 
 fn createGeometry(self: *App) !void {
-    var vertex_data = try ResourceManager.loadGeometryFromObj(
-        self.allocator,
-        obj_file,
-    );
+    var vertex_data = try ResourceManager.loadGeometryFromObj(self.allocator, self.io, obj_file);
     defer vertex_data.deinit(self.allocator);
     self.vertex_count = @intCast(vertex_data.items.len);
 
@@ -435,7 +433,7 @@ fn updateDragInertia(self: *App) void {
         self.camera.angles[0] += @as(f32, @floatCast(self.drag_state.velocity[0]));
         self.camera.angles[1] += @as(f32, @floatCast(self.drag_state.velocity[1]));
         // Clamp to avoid going too far when orbitting up/down
-        self.camera.angles[1] = zmath.clamp(
+        self.camera.angles[1] = std.math.clamp(
             self.camera.angles[1],
             -std.math.pi / 2.0 + 1e-5,
             std.math.pi / 2.0 - 1e-5,
@@ -451,6 +449,7 @@ fn updateDragInertia(self: *App) void {
 fn createPipeline(self: *App) !void {
     const shader_module = try ResourceManager.loadShaderModule(
         self.allocator,
+        self.io,
         "src/resources/shader.wgsl",
         self.gfx.device,
     );
@@ -678,12 +677,14 @@ fn createDepthBuffer(self: *App) void {
 fn createTextures(self: *App) !void {
     self.base_color_texture = try ResourceManager.loadTexture(
         self.allocator,
+        self.io,
         self.gfx,
         "src/resources/cobblestone/cobblestone_floor_08_diff_2k.jpg",
         &self.base_color_texture_view,
     );
     self.normal_texture = try ResourceManager.loadTexture(
         self.allocator,
+        self.io,
         self.gfx,
         "src/resources/cobblestone/cobblestone_floor_08_nor_gl_2k.png",
         &self.normal_texture_view,

@@ -7,7 +7,7 @@ pub fn main() !void {
     defer zglfw.terminate();
 
     zglfw.windowHint(.client_api, .no_api);
-    const window = try zglfw.createWindow(800, 600, "Triangle (zgpu)", null);
+    const window = try zglfw.createWindow(800, 600, "Triangle (zgpu)", null, null);
     defer zglfw.destroyWindow(window);
 
     const gfx = try initGraphics(window);

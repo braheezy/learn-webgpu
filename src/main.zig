@@ -2,15 +2,8 @@ const std = @import("std");
 
 const App = @import("App.zig");
 
-pub fn main() !void {
-    // Memory allocation setup
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer if (gpa.deinit() == .leak) {
-        std.process.exit(1);
-    };
-
-    const app = try App.init(allocator);
+pub fn main(init: std.process.Init) !void {
+    const app = try App.init(init.gpa, init.io);
     defer app.deinit();
 
     while (app.isRunning()) {

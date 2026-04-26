@@ -1,8 +1,7 @@
 const std = @import("std");
 const zgpu = @import("zgpu");
 const obj = @import("obj");
-const jpeg = @import("zjpeg");
-const png = @import("png");
+const zigimg = @import("zigimg");
 const zmath = @import("zmath");
 
 const ResourceManager = @This();
@@ -18,14 +17,15 @@ pub const VertexAttr = struct {
 
 pub fn loadGeometryFromObj(
     allocator: std.mem.Allocator,
+    io: std.Io,
     path: []const u8,
 ) !std.ArrayList(VertexAttr) {
-    // open file
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    // read file
-    const obj_file_contents = try file.readToEndAlloc(allocator, 1024 * 1024 * 10);
+    const obj_file_contents = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        path,
+        allocator,
+        .limited(1024 * 1024 * 10),
+    );
     defer allocator.free(obj_file_contents);
 
     // Load the OBJ model
@@ -148,17 +148,18 @@ pub fn loadGeometryFromObj(
     return vertex_data;
 }
 
-pub fn loadShaderModule(al: std.mem.Allocator, path: []const u8, device: zgpu.wgpu.Device) !zgpu.wgpu.ShaderModule {
-    // open file
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    // read file
-    const contents = try file.readToEndAllocOptions(
+pub fn loadShaderModule(
+    al: std.mem.Allocator,
+    io: std.Io,
+    path: []const u8,
+    device: zgpu.wgpu.Device,
+) !zgpu.wgpu.ShaderModule {
+    const contents = try std.Io.Dir.cwd().readFileAllocOptions(
+        io,
+        path,
         al,
-        1024 * 16,
-        null,
-        .@"8",
+        .limited(1024 * 16),
+        .of(u8),
         0,
     );
     defer al.free(contents);
@@ -168,23 +169,32 @@ pub fn loadShaderModule(al: std.mem.Allocator, path: []const u8, device: zgpu.wg
 
 pub fn loadTexture(
     allocator: std.mem.Allocator,
+    io: std.Io,
     gfx: *zgpu.GraphicsContext,
     path: []const u8,
     texture_view: *?zgpu.TextureViewHandle,
 ) !zgpu.TextureHandle {
-    const ext = std.fs.path.extension(path);
-    const image =
-        if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg"))
-            try jpeg.load(allocator, path)
-        else
-            try png.load(allocator, path);
-    defer image.free(allocator);
+    const image_contents = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        path,
+        allocator,
+        .limited(1024 * 1024 * 64),
+    );
+    defer allocator.free(image_contents);
 
-    const bounds = image.bounds();
-    const width: u32 = @intCast(bounds.dX());
-    const height: u32 = @intCast(bounds.dY());
+    var image = try zigimg.Image.fromMemory(allocator, image_contents);
+    defer image.deinit(allocator);
 
-    const texture_pixels = try image.rgbaPixels(allocator);
+    const width: u32 = @intCast(image.width);
+    const height: u32 = @intCast(image.height);
+
+    const texture_pixels = if (image.pixelFormat() == .rgba32)
+        try allocator.dupe(u8, image.rawBytes())
+    else pixels: {
+        var rgba_pixels = try zigimg.PixelFormatConverter.convert(allocator, &image.pixels, .rgba32);
+        defer rgba_pixels.deinit(allocator);
+        break :pixels try allocator.dupe(u8, rgba_pixels.asBytes());
+    };
     defer allocator.free(texture_pixels);
 
     const mip_level_count = bitWidth(@max(width, height));
